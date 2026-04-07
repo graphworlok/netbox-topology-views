@@ -7,12 +7,12 @@ long_description = readme.read_text()
 
 setup(
     name="netbox-topology-views",
-    version="4.5.1",
+    version="4.5.1-graphworlok",
     description="A NetBox plugin to create Topology maps",
     long_description=long_description,
     long_description_content_type="text/markdown",
-    url="https://github.com/mattieserver/netbox-topology-views",
-    author="Mattijs Vanhaverbeke",
+    url="https://github.com/graphworlok/netbox-topology-views",
+    author="graphworlok",
     license="Apache 2.0",
     install_requires=[],
     packages=find_packages(),
