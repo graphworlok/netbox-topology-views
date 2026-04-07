@@ -194,6 +194,18 @@ def create_node(
             node["virtual_chassis"] = device.virtual_chassis.name
             node["virtual_chassis_id"] = device.virtual_chassis_id
 
+        if device.site is not None and device.site.region is not None:
+            node["region"] = device.site.region.name
+            node["region_id"] = device.site.region_id
+
+        if device.site is not None and hasattr(device.site, 'country') and device.site.country:
+            node["country"] = device.site.country.name
+            node["country_code"] = str(device.site.country)
+
+        if device.tenant is not None:
+            node["tenant"] = device.tenant.name
+            node["tenant_id"] = device.tenant_id
+
         if device.role.color != "":
             node["color.border"] = "#" + device.role.color
 
@@ -307,23 +319,30 @@ def create_edge(
     title = "Cable"
 
     if circuit is not None:
+        edge["connection_type"] = "circuit"
         edge["dashes"] = True
         title = f"Circuit provider: {circuit['provider_name']}<br>Termination"
 
     elif wireless is not None:
+        edge["connection_type"] = "wireless"
         edge["dashes"] = LinePattern().wireless
         title = "Wireless Connection"
 
     elif power is not None:
+        edge["connection_type"] = "power"
         edge["dashes"] = LinePattern().power
         title = "Power Connection"
 
     elif interface is not None:
+        edge["connection_type"] = "logical"
         title = "Interface Connection"
         edge["width"] = 3
         edge["dashes"] = LinePattern().logical
         edge["color"] = '#f1c232'
         edge["href"] = interface.get_absolute_url() + "trace"
+
+    else:
+        edge["connection_type"] = "cable"
     
     if cable is not None and hasattr(cable, "label") and cable.label:
         cable_label = "<br>Label: " + cable.label

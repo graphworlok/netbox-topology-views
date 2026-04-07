@@ -10,12 +10,114 @@
 {% block head %}
 <link rel="stylesheet" href="{% static 'netbox_topology_views/css/vendor.css' %}">
 <link rel="stylesheet" href="{% static 'netbox_topology_views/css/app.css' %}">
+<style>
+  /* Physics settings panel */
+  #physics-settings-panel {
+    display: none;
+    position: fixed;
+    top: 80px;
+    right: 20px;
+    z-index: 1050;
+    width: 280px;
+    box-shadow: 0 4px 16px rgba(0,0,0,0.25);
+  }
+  #physics-settings-panel .card-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    cursor: move;
+    user-select: none;
+  }
+  #physics-settings-panel .param-row {
+    display: grid;
+    grid-template-columns: 1fr auto;
+    align-items: center;
+    gap: 4px;
+    margin-bottom: 10px;
+  }
+  #physics-settings-panel .param-row label {
+    font-size: 12px;
+    margin-bottom: 2px;
+    grid-column: 1 / -1;
+  }
+  #physics-settings-panel .param-row input[type=range] { width: 100%; }
+  #physics-settings-panel .param-row .param-value {
+    font-size: 12px;
+    text-align: right;
+    min-width: 42px;
+  }
+  #physics-settings-panel .section-label {
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    opacity: 0.6;
+    margin: 10px 0 6px;
+  }
+
+  /* Connection-type legend panel */
+  .connection-legend {
+    position: absolute;
+    bottom: 16px;
+    left: 16px;
+    z-index: 10;
+    padding: 10px 14px;
+    font-size: 13px;
+    min-width: 180px;
+    pointer-events: auto;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.20);
+  }
+  .connection-legend-title {
+    font-weight: 600;
+    margin-bottom: 8px;
+  }
+  .connection-legend-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    cursor: pointer;
+    margin-bottom: 5px;
+    user-select: none;
+  }
+  .connection-legend-row:last-child { margin-bottom: 0; }
+  .connection-legend-row input[type="checkbox"] { cursor: pointer; }
+</style>
 {% endblock %} 
 
 {% block controls %}
   <div class="controls">
     	<div class="control-group">
 			{% block extra_controls %}{% endblock %}
+			<div class="btn-group">
+				<button type="button" class="btn btn-secondary dropdown-toggle" data-bs-toggle="dropdown" aria-expanded="false">
+					<i class="mdi mdi-auto-fix"></i> Arrange
+				</button>
+				<ul class="dropdown-menu">
+					<li><h6 class="dropdown-header">Physics / Force-directed</h6></li>
+					<li><a class="dropdown-item physics-layout-btn" href="#" data-solver="forceAtlas2Based">ForceAtlas2 <small class="text-muted">(default)</small></a></li>
+					<li><a class="dropdown-item physics-layout-btn" href="#" data-solver="barnesHut">Barnes-Hut</a></li>
+					<li><a class="dropdown-item physics-layout-btn" href="#" data-solver="repulsion">Repulsion</a></li>
+					<li><hr class="dropdown-divider"></li>
+					<li><h6 class="dropdown-header">Hierarchical</h6></li>
+					<li><a class="dropdown-item hierarchical-layout-btn" href="#" data-direction="UD">Top → Bottom</a></li>
+					<li><a class="dropdown-item hierarchical-layout-btn" href="#" data-direction="DU">Bottom → Top</a></li>
+					<li><a class="dropdown-item hierarchical-layout-btn" href="#" data-direction="LR">Left → Right</a></li>
+					<li><a class="dropdown-item hierarchical-layout-btn" href="#" data-direction="RL">Right → Left</a></li>
+					<li><hr class="dropdown-divider"></li>
+					<li><h6 class="dropdown-header">Static grid by group</h6></li>
+					<li><a class="dropdown-item auto-arrange-btn" href="#" data-group-type-id="region_id" data-group-type-name="region">By Region</a></li>
+					<li><a class="dropdown-item auto-arrange-btn" href="#" data-group-type-id="country_code" data-group-type-name="country">By Country</a></li>
+					<li><a class="dropdown-item auto-arrange-btn" href="#" data-group-type-id="site_id" data-group-type-name="site">By Site</a></li>
+					<li><a class="dropdown-item auto-arrange-btn" href="#" data-group-type-id="location_id" data-group-type-name="location">By Location</a></li>
+					<li><a class="dropdown-item auto-arrange-btn" href="#" data-group-type-id="rack_id" data-group-type-name="rack">By Rack</a></li>
+					<li><a class="dropdown-item auto-arrange-btn" href="#" data-group-type-id="virtual_chassis_id" data-group-type-name="virtual_chassis">By Virtual Chassis</a></li>
+					<li><a class="dropdown-item auto-arrange-btn" href="#" data-group-type-id="tenant_id" data-group-type-name="tenant">By Tenant</a></li>
+					<li><a class="dropdown-item auto-arrange-btn" href="#" data-group-type-id="" data-group-type-name="">Grid (no grouping)</a></li>
+				</ul>
+			</div>
+			<button type="button" class="btn btn-secondary" id="btnPhysicsSettings" title="Physics settings">
+				<i class="mdi mdi-tune-vertical"></i> Physics
+			</button>
 			<a id="btnDownloadXml" class="btn btn-info" href="#">
 				<i class="mdi mdi-download"></i>
 				Download XML
@@ -116,6 +218,144 @@
 
       return height;
     }
+
+    // ---- Arrange button handlers ----
+    document.addEventListener('click', function(e) {
+      const arrangeBtn = e.target.closest('.auto-arrange-btn');
+      if (arrangeBtn) {
+        e.preventDefault();
+        if (typeof window.autoArrange === 'function')
+          window.autoArrange(arrangeBtn.dataset.groupTypeId || null, arrangeBtn.dataset.groupTypeName || null);
+        return;
+      }
+      const physicsBtn = e.target.closest('.physics-layout-btn');
+      if (physicsBtn) {
+        e.preventDefault();
+        if (typeof window.physicsLayout === 'function')
+          window.physicsLayout(physicsBtn.dataset.solver);
+        return;
+      }
+      const hierBtn = e.target.closest('.hierarchical-layout-btn');
+      if (hierBtn) {
+        e.preventDefault();
+        if (typeof window.hierarchicalLayout === 'function')
+          window.hierarchicalLayout(hierBtn.dataset.direction);
+        return;
+      }
+    });
+
+    // ---- Physics settings panel ----
+    // Build the panel HTML once the DOM is ready.
+    document.addEventListener('DOMContentLoaded', function() {
+      const panel = document.createElement('div');
+      panel.id = 'physics-settings-panel';
+      panel.className = 'card';
+      panel.innerHTML = `
+        <div class="card-header py-2 px-3">
+          <span><i class="mdi mdi-tune-vertical"></i> Physics Settings</span>
+          <button type="button" class="btn-close" id="physicsSettingsClose" aria-label="Close"></button>
+        </div>
+        <div class="card-body px-3 py-2">
+
+          <div class="section-label">Hierarchical layout</div>
+
+          <div class="param-row">
+            <label for="ps-sortMethod">Sort method</label>
+            <select id="ps-sortMethod" class="form-select form-select-sm" style="grid-column:1/-1">
+              <option value="hubsize">Hub size (most-connected first)</option>
+              <option value="directed">Directed (follow edge direction)</option>
+            </select>
+          </div>
+          <div class="param-row">
+            <label for="ps-levelSep">Level separation</label>
+            <input type="range" id="ps-levelSep" min="50" max="400" step="10" value="150">
+            <span class="param-value" id="ps-levelSep-val">150</span>
+          </div>
+          <div class="param-row">
+            <label for="ps-nodeSpacing">Node spacing</label>
+            <input type="range" id="ps-nodeSpacing" min="20" max="300" step="10" value="120">
+            <span class="param-value" id="ps-nodeSpacing-val">120</span>
+          </div>
+
+          <div class="section-label">Force-directed</div>
+
+          <div class="param-row">
+            <label for="ps-springLen">Spring length (edge rest length)</label>
+            <input type="range" id="ps-springLen" min="30" max="500" step="10" value="150">
+            <span class="param-value" id="ps-springLen-val">150</span>
+          </div>
+          <div class="param-row">
+            <label for="ps-springK">Spring constant (stiffness)</label>
+            <input type="range" id="ps-springK" min="1" max="100" step="1" value="5">
+            <span class="param-value" id="ps-springK-val">0.05</span>
+          </div>
+          <div class="param-row">
+            <label for="ps-damping">Damping</label>
+            <input type="range" id="ps-damping" min="1" max="100" step="1" value="9">
+            <span class="param-value" id="ps-damping-val">0.09</span>
+          </div>
+
+        </div>
+      `;
+      document.body.appendChild(panel);
+
+      // Toggle panel visibility
+      document.getElementById('btnPhysicsSettings').addEventListener('click', function() {
+        panel.style.display = panel.style.display === 'none' || panel.style.display === '' ? 'block' : 'none';
+      });
+      document.getElementById('physicsSettingsClose').addEventListener('click', function() {
+        panel.style.display = 'none';
+      });
+
+      // Make the panel draggable by its header
+      (function makeDraggable(el, handle) {
+        let startX, startY, origLeft, origTop;
+        handle.addEventListener('mousedown', function(e) {
+          if (e.target.closest('button')) return;
+          startX = e.clientX; startY = e.clientY;
+          const rect = el.getBoundingClientRect();
+          origLeft = rect.left; origTop = rect.top;
+          el.style.right = 'auto';
+          el.style.left = origLeft + 'px';
+          el.style.top  = origTop  + 'px';
+          function onMove(ev) {
+            el.style.left = (origLeft + ev.clientX - startX) + 'px';
+            el.style.top  = (origTop  + ev.clientY - startY) + 'px';
+          }
+          function onUp() {
+            document.removeEventListener('mousemove', onMove);
+            document.removeEventListener('mouseup',   onUp);
+          }
+          document.addEventListener('mousemove', onMove);
+          document.addEventListener('mouseup',   onUp);
+        });
+      })(panel, panel.querySelector('.card-header'));
+
+      // Helper: bind a range input → update physicsSettings + label + live apply
+      function bindRange(inputId, valId, settingKey, scale) {
+        const input = document.getElementById(inputId);
+        const valEl = document.getElementById(valId);
+        input.addEventListener('input', function() {
+          const raw = parseFloat(input.value);
+          const val = scale ? raw / scale : raw;
+          window.physicsSettings[settingKey] = val;
+          valEl.textContent = val.toFixed(scale ? 2 : 0);
+          if (typeof window.applyPhysicsSettings === 'function')
+            window.applyPhysicsSettings();
+        });
+      }
+
+      bindRange('ps-levelSep',    'ps-levelSep-val',    'levelSeparation', null);
+      bindRange('ps-nodeSpacing', 'ps-nodeSpacing-val', 'nodeSpacing',     null);
+      bindRange('ps-springLen',   'ps-springLen-val',   'springLength',    null);
+      bindRange('ps-springK',     'ps-springK-val',     'springConstant',  100);
+      bindRange('ps-damping',     'ps-damping-val',     'damping',         100);
+
+      document.getElementById('ps-sortMethod').addEventListener('change', function() {
+        window.physicsSettings.sortMethod = this.value;
+        // sortMethod only affects the next hierarchical layout call
+      });
+    });
 </script>
 	<script src="{% static 'netbox_topology_views/js/app.js' %}" defer></script>
 {% endblock javascript %}

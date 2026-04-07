@@ -94,7 +94,7 @@ const coordSaveCheckbox = document.querySelector('#id_save_coords')
         }))
     )
 
-    // make nodes object available globally in order to update their physics and positions later
+    // make nodes and edges available globally
     window.nodes = nodes;
 
     const edges = new DataSet(
@@ -117,6 +117,7 @@ const coordSaveCheckbox = document.querySelector('#id_save_coords')
             })
         }))
     )
+    window.edges = edges;
 
     const group_sites = topologyData.options.group_sites
     const group_locations = topologyData.options.group_locations
@@ -128,6 +129,97 @@ const coordSaveCheckbox = document.querySelector('#id_save_coords')
 
     graph = new Network(container, { nodes, edges }, options)
     graph.fit()
+
+    // ---- Connection-type legend with per-type visibility toggles ----
+
+    // Metadata for each known connection type: label, edge color, SVG dash pattern, stroke width.
+    // Dash patterns mirror the vis-network dashes arrays used in create_edge() on the backend.
+    const CONNECTION_TYPE_META = {
+        cable:    { label: 'Physical Cable',     color: '#2b7ce9', dash: null,      width: 2 },
+        circuit:  { label: 'Circuit',            color: '#2b7ce9', dash: '6,3',     width: 2 },
+        wireless: { label: 'Wireless',           color: '#2b7ce9', dash: '2,8',     width: 2 },
+        power:    { label: 'Power',              color: '#2b7ce9', dash: '5,4,3,4', width: 2 },
+        logical:  { label: 'Logical Connection', color: '#f1c232', dash: '1,8',     width: 3 },
+    }
+
+    // Discover which types are actually present in this topology
+    const presentConnectionTypes = new Set()
+    for (let [, edge] of edges._data) {
+        if (edge.connection_type) presentConnectionTypes.add(edge.connection_type)
+    }
+
+    // Show/hide all edges of a given connection_type
+    window.toggleConnectionType = function toggleConnectionType(type, visible) {
+        const updates = []
+        for (let [id, edge] of edges._data) {
+            if (edge.connection_type === type) {
+                updates.push({ id, hidden: !visible })
+            }
+        }
+        edges.update(updates)
+    }
+
+    // Build the legend DOM only when there is at least one typed edge
+    if (presentConnectionTypes.size > 0) {
+        const legend = document.createElement('div')
+        legend.id = 'connection-legend'
+        legend.className = 'connection-legend card'
+
+        const legendTitle = document.createElement('div')
+        legendTitle.className = 'connection-legend-title'
+        legendTitle.textContent = 'Connection Types'
+        legend.appendChild(legendTitle)
+
+        function makeLegendSVG(meta) {
+            const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg')
+            svg.setAttribute('width', '38')
+            svg.setAttribute('height', '12')
+            svg.style.flexShrink = '0'
+            const line = document.createElementNS('http://www.w3.org/2000/svg', 'line')
+            line.setAttribute('x1', '1');  line.setAttribute('y1', '6')
+            line.setAttribute('x2', '37'); line.setAttribute('y2', '6')
+            line.setAttribute('stroke', meta.color)
+            line.setAttribute('stroke-width', String(meta.width))
+            if (meta.dash) line.setAttribute('stroke-dasharray', meta.dash)
+            svg.appendChild(line)
+            return svg
+        }
+
+        const TYPE_ORDER = ['cable', 'circuit', 'wireless', 'power', 'logical']
+        for (const type of TYPE_ORDER) {
+            if (!presentConnectionTypes.has(type)) continue
+            const meta = CONNECTION_TYPE_META[type]
+
+            const row = document.createElement('label')
+            row.className = 'connection-legend-row'
+
+            const cb = document.createElement('input')
+            cb.type = 'checkbox'
+            cb.checked = true
+            cb.addEventListener('change', () => window.toggleConnectionType(type, cb.checked))
+
+            const text = document.createElement('span')
+            text.textContent = meta.label
+
+            row.appendChild(cb)
+            row.appendChild(makeLegendSVG(meta))
+            row.appendChild(text)
+            legend.appendChild(row)
+        }
+
+        // The legend lives inside the graph container so it scrolls/resizes with it
+        container.style.position = 'relative'
+        container.appendChild(legend)
+
+        // Refresh SVG stroke colors when the NetBox theme changes
+        const legendObserver = new MutationObserver(() => {
+            // Currently all types share the same base color so no update needed,
+            // but this hook is here for future per-theme color overrides.
+        })
+        legendObserver.observe(document.documentElement, {
+            attributes: true, attributeFilter: ['data-bs-theme']
+        })
+    }
 
     function getGridPosition(nodeId, gridSize) {
         x = graph.getPosition(nodeId).x;
@@ -476,6 +568,239 @@ const coordSaveCheckbox = document.querySelector('#id_save_coords')
             rectangles.forEach(function(rectangle) {
                 drawGroupRectangle(rectangle);
             });
+        }
+    }
+
+    // ---- Physics-engine layouts ----
+    //
+    // These functions apply a vis-network solver and leave physics running so
+    // the user can interact with the live simulation.  Parameters are read from
+    // window.physicsSettings, which the Physics Settings panel updates in real
+    // time via applyPhysicsSettings().
+
+    // Default parameters – populated once; the settings panel updates them.
+    window.physicsSettings = window.physicsSettings || {
+        solver:          'forceAtlas2Based',
+        springLength:    150,
+        springConstant:  0.05,
+        damping:         0.09,
+        levelSeparation: 150,
+        nodeSpacing:     120,
+        sortMethod:      'hubsize',
+    }
+
+    // Re-enable physics on every node so the active solver can move them.
+    function releaseAllNodes() {
+        nodes.update([...nodes._data.keys()].map(id => ({ id, physics: true })))
+    }
+
+    // Build the physics options block for the current settings and solver.
+    function buildPhysicsOptions(solver) {
+        const s = window.physicsSettings
+        const base = {
+            enabled: true,
+            solver,
+            stabilization: { enabled: false },
+        }
+        if (solver === 'forceAtlas2Based') {
+            base.forceAtlas2Based = {
+                springLength:   s.springLength,
+                springConstant: s.springConstant,
+                damping:        s.damping,
+            }
+        } else if (solver === 'barnesHut') {
+            base.barnesHut = {
+                springLength:   s.springLength,
+                springConstant: s.springConstant,
+                damping:        s.damping,
+            }
+        } else if (solver === 'repulsion') {
+            base.repulsion = {
+                nodeDistance:   s.springLength,
+                springLength:   s.springLength,
+                springConstant: s.springConstant,
+                damping:        s.damping,
+            }
+        } else if (solver === 'hierarchicalRepulsion') {
+            base.hierarchicalRepulsion = {
+                nodeDistance:   s.nodeSpacing,
+                springLength:   s.springLength,
+                springConstant: s.springConstant,
+                damping:        s.damping,
+            }
+        }
+        return base
+    }
+
+    // Apply one of the force-directed solvers and let physics run freely.
+    // solver: 'forceAtlas2Based' | 'barnesHut' | 'repulsion'
+    window.physicsLayout = function physicsLayout(solver) {
+        window.physicsSettings.solver = solver
+        releaseAllNodes()
+        graph.setOptions({
+            layout: { hierarchical: { enabled: false } },
+            physics: buildPhysicsOptions(solver),
+        })
+        graph.fit({ animation: { duration: 400, easingFunction: 'easeInOutQuad' } })
+    }
+
+    // Apply vis-network's hierarchical layout with live physics.
+    // direction: 'UD' | 'DU' | 'LR' | 'RL'
+    window.hierarchicalLayout = function hierarchicalLayout(direction) {
+        const s = window.physicsSettings
+        window.physicsSettings.solver = 'hierarchicalRepulsion'
+        releaseAllNodes()
+        graph.setOptions({
+            layout: {
+                hierarchical: {
+                    enabled:             true,
+                    direction,
+                    sortMethod:          s.sortMethod,
+                    levelSeparation:     s.levelSeparation,
+                    nodeSpacing:         s.nodeSpacing,
+                    treeSpacing:         s.nodeSpacing * 2,
+                    blockShifting:       true,
+                    edgeMinimization:    true,
+                    parentCentralization: true,
+                },
+            },
+            physics: buildPhysicsOptions('hierarchicalRepulsion'),
+        })
+        graph.fit({ animation: { duration: 400, easingFunction: 'easeInOutQuad' } })
+    }
+
+    // Re-apply current solver settings without changing the solver or layout.
+    // Called by the Physics Settings panel whenever a parameter changes.
+    window.applyPhysicsSettings = function applyPhysicsSettings() {
+        const s = window.physicsSettings
+        graph.setOptions({ physics: buildPhysicsOptions(s.solver) })
+    }
+
+    // ---- Auto Arrange ----
+    // Arrange nodes in non-overlapping groups based on a node attribute.
+    //
+    // groupTypeId : the node property used as the group key
+    //               e.g. 'site_id', 'region_id', 'country_code', 'tenant_id',
+    //                    'location_id', 'rack_id', 'virtual_chassis_id', or null
+    // groupTypeName: the node property used for the human-readable group label
+    //
+    // When groupTypeId is null every node is placed in a plain grid.
+    //
+    // Virtual chassis groups may overlap site/location/rack rectangles because a
+    // virtual chassis can span multiple physical groupings – this is expected.
+    window.autoArrange = function autoArrange(groupTypeId, groupTypeName) {
+        const NODE_SPACING = 120;  // centre-to-centre distance within a group
+        const GROUP_PADDING = 80;  // space between group edge and nearest node
+        const GROUP_MARGIN  = 60;  // gap between adjacent groups
+
+        const updates = [];
+
+        if (!groupTypeId) {
+            // Plain grid – no grouping
+            const allIds = [...nodes._data.keys()];
+            const cols = Math.max(1, Math.ceil(Math.sqrt(allIds.length)));
+            allIds.forEach((nodeId, i) => {
+                updates.push({
+                    id: nodeId,
+                    x: (i % cols) * NODE_SPACING,
+                    y: Math.floor(i / cols) * NODE_SPACING,
+                    physics: false
+                });
+            });
+        } else {
+            // Grouped layout
+            const groupMap = {};  // groupKey -> nodeId[]
+            const ungrouped = [];
+
+            for (let [, node] of nodes._data) {
+                const gid = node[groupTypeId];
+                if (gid !== undefined) {
+                    if (!groupMap[gid]) groupMap[gid] = [];
+                    groupMap[gid].push(node.id);
+                } else {
+                    ungrouped.push(node.id);
+                }
+            }
+
+            const groupList = Object.values(groupMap);
+            const groupsPerRow = Math.max(1, Math.ceil(Math.sqrt(
+                groupList.length + (ungrouped.length > 0 ? 1 : 0)
+            )));
+
+            let curX = 0, curY = 0, rowMaxH = 0, colInRow = 0;
+
+            for (const nodeIds of groupList) {
+                const N = nodeIds.length;
+                const innerCols = Math.max(1, Math.ceil(Math.sqrt(N)));
+                const innerRows = Math.ceil(N / innerCols);
+
+                nodeIds.forEach((nodeId, i) => {
+                    updates.push({
+                        id: nodeId,
+                        x: curX + GROUP_PADDING + (i % innerCols) * NODE_SPACING,
+                        y: curY + GROUP_PADDING + Math.floor(i / innerCols) * NODE_SPACING,
+                        physics: false
+                    });
+                });
+
+                const groupW = GROUP_PADDING * 2 + Math.max(0, innerCols - 1) * NODE_SPACING;
+                const groupH = GROUP_PADDING * 2 + Math.max(0, innerRows - 1) * NODE_SPACING;
+
+                rowMaxH = Math.max(rowMaxH, groupH);
+                colInRow++;
+                curX += groupW + GROUP_MARGIN;
+
+                if (colInRow >= groupsPerRow) {
+                    colInRow = 0;
+                    curX = 0;
+                    curY += rowMaxH + GROUP_MARGIN;
+                    rowMaxH = 0;
+                }
+            }
+
+            // Ungrouped nodes go below the grouped area
+            if (ungrouped.length > 0) {
+                curY += rowMaxH + GROUP_MARGIN;
+                const ugCols = Math.max(1, Math.ceil(Math.sqrt(ungrouped.length)));
+                ungrouped.forEach((nodeId, i) => {
+                    updates.push({
+                        id: nodeId,
+                        x: (i % ugCols) * NODE_SPACING,
+                        y: curY + Math.floor(i / ugCols) * NODE_SPACING,
+                        physics: false
+                    });
+                });
+            }
+        }
+
+        nodes.update(updates);
+
+        // Fit the view once positions have settled
+        setTimeout(() => graph.fit({
+            animation: { duration: 500, easingFunction: 'easeInOutQuad' }
+        }), 50);
+
+        // Persist positions if coordinate saving is enabled
+        if (coordSaveCheckbox.options[coordSaveCheckbox.selectedIndex].text === 'Yes') {
+            Promise.allSettled(updates.map(({ id, x, y }) =>
+                fetch(
+                    '/' + basePath + 'api/plugins/netbox_topology_views/save-coords/save_coords/',
+                    {
+                        method: 'PATCH',
+                        headers: {
+                            'X-CSRFToken': window.CSRF_TOKEN,
+                            Accept: 'application/json',
+                            'Content-Type': 'application/json'
+                        },
+                        body: JSON.stringify({
+                            node_id: id,
+                            x: x,
+                            y: y,
+                            group: topologyData.group
+                        })
+                    }
+                )
+            ));
         }
     }
 
