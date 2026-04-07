@@ -7,7 +7,7 @@ long_description = readme.read_text()
 
 setup(
     name="netbox-topology-views",
-    version="4.5.1-graphworlok",
+    version="4.5.1.post1",
     description="A NetBox plugin to create Topology maps",
     long_description=long_description,
     long_description_content_type="text/markdown",
