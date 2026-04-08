@@ -104,7 +104,10 @@
 					<li><a class="dropdown-item hierarchical-layout-btn" href="#" data-direction="LR">Left → Right</a></li>
 					<li><a class="dropdown-item hierarchical-layout-btn" href="#" data-direction="RL">Right → Left</a></li>
 					<li><hr class="dropdown-divider"></li>
-					<li><h6 class="dropdown-header">Static grid by group</h6></li>
+					<li><h6 class="dropdown-header">Hierarchical by specificity</h6></li>
+				<li><a class="dropdown-item" href="#" onclick="event.preventDefault();if(typeof window.arrangeByHierarchy==='function')window.arrangeByHierarchy()">By Hierarchy (rack → location → site)</a></li>
+				<li><hr class="dropdown-divider"></li>
+				<li><h6 class="dropdown-header">Static grid by group</h6></li>
 					<li><a class="dropdown-item auto-arrange-btn" href="#" data-group-type-id="region_id" data-group-type-name="region">By Region</a></li>
 					<li><a class="dropdown-item auto-arrange-btn" href="#" data-group-type-id="country_code" data-group-type-name="country">By Country</a></li>
 					<li><a class="dropdown-item auto-arrange-btn" href="#" data-group-type-id="site_id" data-group-type-name="site">By Site</a></li>
@@ -260,6 +263,14 @@
         </div>
         <div class="card-body px-3 py-2">
 
+          <div class="section-label">Group separation</div>
+
+          <div class="param-row">
+            <label for="ps-groupMargin">Min gap between groups</label>
+            <input type="range" id="ps-groupMargin" min="0" max="300" step="10" value="60">
+            <span class="param-value" id="ps-groupMargin-val">60</span>
+          </div>
+
           <div class="section-label">Hierarchical layout</div>
 
           <div class="param-row">
@@ -348,6 +359,7 @@
         });
       }
 
+      bindRange('ps-groupMargin', 'ps-groupMargin-val', 'groupMargin',     null);
       bindRange('ps-levelSep',    'ps-levelSep-val',    'levelSeparation', null);
       bindRange('ps-nodeSpacing', 'ps-nodeSpacing-val', 'nodeSpacing',     null);
       bindRange('ps-springLen',   'ps-springLen-val',   'springLength',    null);

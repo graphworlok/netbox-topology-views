@@ -587,6 +587,7 @@ const coordSaveCheckbox = document.querySelector('#id_save_coords')
         levelSeparation: 150,
         nodeSpacing:     120,
         sortMethod:      'hubsize',
+        groupMargin:     60,
     }
 
     // Re-enable physics on every node so the active solver can move them.
@@ -681,6 +682,7 @@ const coordSaveCheckbox = document.querySelector('#id_save_coords')
     // locations vs locations, etc.) no longer overlap each other.
     window.separateGroups = function separateGroups() {
         graph.setOptions({ physics: { enabled: false } })
+        const MARGIN = window.physicsSettings.groupMargin
 
         const nodeOffsets = {} // nodeId -> {dx, dy}
         function addOffset(id, dx, dy) {
@@ -715,8 +717,9 @@ const coordSaveCheckbox = document.querySelector('#id_save_coords')
                 for (let i = 0; i < groups.length; i++) {
                     for (let j = i + 1; j < groups.length; j++) {
                         const a = groups[i], b = groups[j]
-                        const ox = Math.min(a.x2, b.x2) - Math.max(a.x1, b.x1)
-                        const oy = Math.min(a.y2, b.y2) - Math.max(a.y1, b.y1)
+                        // ox/oy > 0 means overlapping; include MARGIN so groups stay MARGIN apart
+                        const ox = Math.min(a.x2, b.x2) - Math.max(a.x1, b.x1) + MARGIN
+                        const oy = Math.min(a.y2, b.y2) - Math.max(a.y1, b.y1) + MARGIN
                         if (ox <= 0 || oy <= 0) continue
                         changed = true
                         let mdx = 0, mdy = 0
@@ -741,9 +744,9 @@ const coordSaveCheckbox = document.querySelector('#id_save_coords')
             }
         }
 
-        if (group_sites === 'on')         separateGroupSet(groupedNodeSites,          siteRectParams)
-        if (group_locations === 'on')     separateGroupSet(groupedNodeLocations,      locationRectParams)
-        if (group_racks === 'on')         separateGroupSet(groupedNodeRacks,          rackRectParams)
+        if (group_sites === 'on')          separateGroupSet(groupedNodeSites,          siteRectParams)
+        if (group_locations === 'on')      separateGroupSet(groupedNodeLocations,      locationRectParams)
+        if (group_racks === 'on')          separateGroupSet(groupedNodeRacks,          rackRectParams)
         if (group_virtualchassis === 'on') separateGroupSet(groupedNodeVirtualchassis, virtualchassisRectParams)
 
         const updates = []
@@ -757,6 +760,170 @@ const coordSaveCheckbox = document.querySelector('#id_save_coords')
             nodes.update(updates)
             graph.fit({ animation: { duration: 600, easingFunction: 'easeInOutQuad' } })
         }
+    }
+
+    // ---- Arrange by hierarchy (rack → location → site) ----
+    // Places nodes bottom-up by specificity, packing each level tightly to
+    // minimise empty space, with at least physicsSettings.groupMargin px between
+    // sibling groups at every level.
+    window.arrangeByHierarchy = function arrangeByHierarchy() {
+        graph.setOptions({ physics: { enabled: false } })
+
+        const MARGIN = window.physicsSettings.groupMargin
+        const NODE_SPACING = 80  // tight spacing between nodes within a group
+
+        const updates = []
+        function placeNode(id, x, y) { updates.push({ id, x, y, physics: false }) }
+
+        // Simulate row-by-row packing with a fixed column count. Returns {pos,w,h}.
+        function simulatePack(items, numCols, gap) {
+            let x = 0, y = 0, rowH = 0, col = 0
+            const pos = []
+            for (let i = 0; i < items.length; i++) {
+                pos.push({ x, y })
+                rowH = Math.max(rowH, items[i].h)
+                if (++col >= numCols) { col = 0; x = 0; y += rowH + gap; rowH = 0 }
+                else x += items[i].w + gap
+            }
+            let mxX = 0, mxY = 0
+            pos.forEach((p, i) => { mxX = Math.max(mxX, p.x + items[i].w); mxY = Math.max(mxY, p.y + items[i].h) })
+            return { pos, w: mxX || 1, h: mxY || 1 }
+        }
+
+        // Pack items [{w,h}] choosing the column count closest to 1:1 aspect ratio.
+        function pack(items, gap) {
+            if (!items.length) return { pos: [], w: 0, h: 0 }
+            let best = null, bestRatio = Infinity
+            for (let c = 1; c <= items.length; c++) {
+                const r = simulatePack(items, c, gap)
+                const ratio = Math.max(r.w / r.h, r.h / r.w)
+                if (ratio < bestRatio) { bestRatio = ratio; best = { cols: c, ...r } }
+            }
+            return best
+        }
+
+        // Layout a flat list of nodes in the most square grid possible.
+        function layoutNodes(nodeList) {
+            const n = nodeList.length
+            if (!n) return { w: 0, h: 0, placeAt() {} }
+            let bestCols = 1, bestRatio = Infinity
+            for (let c = 1; c <= n; c++) {
+                const rows = Math.ceil(n / c)
+                const w = (Math.min(n, c) - 1) * NODE_SPACING || 1
+                const h = (rows - 1) * NODE_SPACING || 1
+                const ratio = Math.max(w / h, h / w)
+                if (ratio < bestRatio) { bestRatio = ratio; bestCols = c }
+            }
+            const cols = bestCols
+            const rows = Math.ceil(n / cols)
+            const w = (Math.min(n, cols) - 1) * NODE_SPACING
+            const h = (rows - 1) * NODE_SPACING
+            return {
+                w, h,
+                placeAt(ox, oy) {
+                    nodeList.forEach((node, i) => placeNode(node.id,
+                        ox + (i % cols) * NODE_SPACING,
+                        oy + Math.floor(i / cols) * NODE_SPACING))
+                }
+            }
+        }
+
+        // Layout a mix of sub-layouts and loose nodes into one group.
+        // Returns { w, h, placeAt(ox,oy) }
+        function layoutGroup(subLayouts, looseNodes) {
+            const looseLayout = layoutNodes(looseNodes)
+            const all = [...subLayouts, ...(looseNodes.length ? [looseLayout] : [])]
+            if (!all.length) return { w: 0, h: 0, placeAt() {} }
+            const packed = pack(all.map(a => ({ w: a.w, h: a.h })), MARGIN)
+            return {
+                w: packed.w,
+                h: packed.h,
+                placeAt(ox, oy) {
+                    all.forEach((layout, i) => layout.placeAt(ox + packed.pos[i].x, oy + packed.pos[i].y))
+                }
+            }
+        }
+
+        const allNodes = [...nodes._data.values()]
+
+        // RACK level
+        const rackNodeMap = {}
+        const noRackNodes = []
+        for (const node of allNodes) {
+            if (node.rack_id != null)
+                (rackNodeMap[node.rack_id] = rackNodeMap[node.rack_id] || []).push(node)
+            else noRackNodes.push(node)
+        }
+        const rackLayouts = {}
+        for (const [rackId, nl] of Object.entries(rackNodeMap))
+            rackLayouts[rackId] = layoutNodes(nl)
+
+        // LOCATION level
+        const locRackMap = {}, locLooseMap = {}, noLocRacks = [], noLocLoose = []
+        for (const [rackId, nl] of Object.entries(rackNodeMap)) {
+            const locId = nl[0]?.location_id ?? null
+            if (locId != null) (locRackMap[locId] = locRackMap[locId] || []).push(rackId)
+            else noLocRacks.push(rackId)
+        }
+        for (const node of noRackNodes) {
+            const locId = node.location_id ?? null
+            if (locId != null) (locLooseMap[locId] = locLooseMap[locId] || []).push(node)
+            else noLocLoose.push(node)
+        }
+        const allLocIds = new Set([...Object.keys(locRackMap), ...Object.keys(locLooseMap)])
+        const locLayouts = {}
+        for (const locId of allLocIds) {
+            locLayouts[locId] = layoutGroup(
+                (locRackMap[locId] || []).map(rackId => rackLayouts[rackId]),
+                locLooseMap[locId] || []
+            )
+        }
+
+        // SITE level
+        const siteLocMap = {}, siteLooseRacks = {}, siteLooseNodes = {}
+        const noSiteLocs = [], noSiteRacks = [], noSiteNodes = []
+        for (const locId of allLocIds) {
+            const racks = locRackMap[locId], looseNodes = locLooseMap[locId]
+            const siteId = (racks?.[0] && rackNodeMap[racks[0]]?.[0]?.site_id) ??
+                           (looseNodes?.[0]?.site_id) ?? null
+            if (siteId != null) (siteLocMap[siteId] = siteLocMap[siteId] || []).push(locId)
+            else noSiteLocs.push(locId)
+        }
+        for (const rackId of noLocRacks) {
+            const siteId = rackNodeMap[rackId]?.[0]?.site_id ?? null
+            if (siteId != null) (siteLooseRacks[siteId] = siteLooseRacks[siteId] || []).push(rackId)
+            else noSiteRacks.push(rackId)
+        }
+        for (const node of noLocLoose) {
+            const siteId = node.site_id ?? null
+            if (siteId != null) (siteLooseNodes[siteId] = siteLooseNodes[siteId] || []).push(node)
+            else noSiteNodes.push(node)
+        }
+        const allSiteIds = new Set([...Object.keys(siteLocMap), ...Object.keys(siteLooseRacks), ...Object.keys(siteLooseNodes)])
+        const siteLayouts = {}
+        for (const siteId of allSiteIds) {
+            siteLayouts[siteId] = layoutGroup(
+                [
+                    ...(siteLocMap[siteId] || []).map(locId => locLayouts[locId]),
+                    ...(siteLooseRacks[siteId] || []).map(rackId => rackLayouts[rackId]),
+                ],
+                siteLooseNodes[siteId] || []
+            )
+        }
+
+        // TOP LEVEL: pack all sites + unsited items
+        const topLayout = layoutGroup(
+            [
+                ...Object.values(siteLayouts),
+                ...noSiteLocs.map(locId => locLayouts[locId]),
+                ...noSiteRacks.map(rackId => rackLayouts[rackId]),
+            ],
+            noSiteNodes
+        )
+        topLayout.placeAt(0, 0)
+
+        nodes.update(updates)
+        setTimeout(() => graph.fit({ animation: { duration: 600, easingFunction: 'easeInOutQuad' } }), 50)
     }
 
     // ---- Auto Arrange ----
