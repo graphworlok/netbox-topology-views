@@ -676,6 +676,89 @@ const coordSaveCheckbox = document.querySelector('#id_save_coords')
         graph.setOptions({ physics: buildPhysicsOptions(s.solver) })
     }
 
+    // ---- Separate overlapping group bounding boxes ----
+    // Moves nodes so that sibling groups of the same type (sites vs sites,
+    // locations vs locations, etc.) no longer overlap each other.
+    window.separateGroups = function separateGroups() {
+        graph.setOptions({ physics: { enabled: false } })
+
+        const nodeOffsets = {} // nodeId -> {dx, dy}
+        function addOffset(id, dx, dy) {
+            if (!nodeOffsets[id]) nodeOffsets[id] = { dx: 0, dy: 0 }
+            nodeOffsets[id].dx += dx
+            nodeOffsets[id].dy += dy
+        }
+
+        function separateGroupSet(groupedNodes, rectParams) {
+            const groups = []
+            for (const [, members] of Object.entries(groupedNodes)) {
+                const nodeIds = members.map(m => m[0])
+                const positions = graph.getPositions(nodeIds)
+                const xs = [], ys = []
+                for (const id of nodeIds) {
+                    const p = positions[id]
+                    if (p) { xs.push(p.x); ys.push(p.y) }
+                }
+                if (xs.length === 0) continue
+                groups.push({
+                    nodeIds,
+                    x1: Math.min(...xs) - rectParams.paddingX,
+                    y1: Math.min(...ys) - rectParams.paddingY,
+                    x2: Math.max(...xs) + rectParams.paddingX,
+                    y2: Math.max(...ys) + rectParams.paddingY,
+                    dx: 0, dy: 0,
+                })
+            }
+
+            for (let iter = 0; iter < 300; iter++) {
+                let changed = false
+                for (let i = 0; i < groups.length; i++) {
+                    for (let j = i + 1; j < groups.length; j++) {
+                        const a = groups[i], b = groups[j]
+                        const ox = Math.min(a.x2, b.x2) - Math.max(a.x1, b.x1)
+                        const oy = Math.min(a.y2, b.y2) - Math.max(a.y1, b.y1)
+                        if (ox <= 0 || oy <= 0) continue
+                        changed = true
+                        let mdx = 0, mdy = 0
+                        if (ox <= oy) {
+                            mdx = (ox / 2 + 1) * ((a.x1 + a.x2) < (b.x1 + b.x2) ? -1 : 1)
+                        } else {
+                            mdy = (oy / 2 + 1) * ((a.y1 + a.y2) < (b.y1 + b.y2) ? -1 : 1)
+                        }
+                        a.x1 += mdx; a.x2 += mdx; a.dx += mdx
+                        a.y1 += mdy; a.y2 += mdy; a.dy += mdy
+                        b.x1 -= mdx; b.x2 -= mdx; b.dx -= mdx
+                        b.y1 -= mdy; b.y2 -= mdy; b.dy -= mdy
+                    }
+                }
+                if (!changed) break
+            }
+
+            for (const g of groups) {
+                if (g.dx !== 0 || g.dy !== 0) {
+                    for (const id of g.nodeIds) addOffset(id, g.dx, g.dy)
+                }
+            }
+        }
+
+        if (group_sites === 'on')         separateGroupSet(groupedNodeSites,          siteRectParams)
+        if (group_locations === 'on')     separateGroupSet(groupedNodeLocations,      locationRectParams)
+        if (group_racks === 'on')         separateGroupSet(groupedNodeRacks,          rackRectParams)
+        if (group_virtualchassis === 'on') separateGroupSet(groupedNodeVirtualchassis, virtualchassisRectParams)
+
+        const updates = []
+        for (const [id, off] of Object.entries(nodeOffsets)) {
+            if (off.dx !== 0 || off.dy !== 0) {
+                const pos = graph.getPosition(id)
+                updates.push({ id, x: pos.x + off.dx, y: pos.y + off.dy, physics: false })
+            }
+        }
+        if (updates.length > 0) {
+            nodes.update(updates)
+            graph.fit({ animation: { duration: 600, easingFunction: 'easeInOutQuad' } })
+        }
+    }
+
     // ---- Auto Arrange ----
     // Arrange nodes in non-overlapping groups based on a node attribute.
     //
