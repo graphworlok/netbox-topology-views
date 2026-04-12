@@ -387,6 +387,9 @@ class IndividualOptions(NetBoxModel):
     show_wireless = models.BooleanField(
         default=False
     )
+    show_arp_neighbors = models.BooleanField(
+        default=False
+    )
     group_sites = models.BooleanField(
         default=False
     )

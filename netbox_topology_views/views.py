@@ -16,6 +16,11 @@ from dcim.models import (
     PowerPanel,
     RearPort,
 )
+try:
+    from dcim.models import MACAddress as NetBoxMACAddress
+    _HAS_MAC_MODEL = True
+except ImportError:
+    _HAS_MAC_MODEL = False
 from django.conf import settings
 from django.contrib import messages
 from django.contrib.auth.mixins import PermissionRequiredMixin
@@ -102,7 +107,33 @@ def create_node(
 ):
     node = {}
     node_content = ""
-    if isinstance(device, Circuit):
+    if isinstance(device, ProviderNetwork):
+        dev_name = device.name
+        node["id"] = f"pn{device.pk}"
+        model_name = 'CircuitCoordinate'
+
+        if device.provider is not None:
+            node_content += (
+                f"<tr><th>Provider: </th><td>{device.provider.name}</td></tr>"
+            )
+            try:
+                for asn_obj in device.provider.asns.all():
+                    node_content += (
+                        f"<tr><th>Upstream ASN: </th><td>AS{asn_obj.asn}"
+                        + (f" ({asn_obj.description})" if asn_obj.description else "")
+                        + "</td></tr>"
+                    )
+            except Exception:
+                pass
+        if device.service_id:
+            node_content += (
+                f"<tr><th>Service ID: </th><td>{device.service_id}</td></tr>"
+            )
+        if device.description:
+            node_content += (
+                f"<tr><th>Description: </th><td>{device.description}</td></tr>"
+            )
+    elif isinstance(device, Circuit):
         dev_name = device.cid
         node["id"] = f"c{device.pk}"
         model_name = 'CircuitCoordinate'
@@ -111,6 +142,15 @@ def create_node(
             node_content += (
                 f"<tr><th>Provider: </th><td>{device.provider.name}</td></tr>"
             )
+            try:
+                for asn_obj in device.provider.asns.all():
+                    node_content += (
+                        f"<tr><th>Upstream ASN: </th><td>AS{asn_obj.asn}"
+                        + (f" ({asn_obj.description})" if asn_obj.description else "")
+                        + "</td></tr>"
+                    )
+            except Exception:
+                pass
         if device.type is not None:
             node_content += f"<tr><th>Type: </th><td>{device.type.name}</td></tr>"
     elif isinstance(device, PowerPanel):
@@ -415,6 +455,7 @@ def get_topology_data(
     draw_cable_labels: bool,
     grid_size: list,
     node_label_items: list,
+    show_arp_neighbors: bool = False,
 ):
     
     supported_termination_types = []
@@ -540,6 +581,46 @@ def get_topology_data(
 
         for d in nodes_circuits.values():
             nodes.append(create_node(d, save_coords, node_label_items, group_id))
+
+        # Render ProviderNetwork nodes (ISP cloud nodes) and connect them to circuits
+        for pn in nodes_provider_networks.values():
+            nodes.append(create_node(pn, save_coords, node_label_items, group_id))
+
+        # Add edges between circuits and their provider networks
+        for circuit_termination in CircuitTermination.objects.filter(
+            Q(_site_id__in=site_ids) | Q(_provider_network__isnull=False)
+        ).select_related("circuit__provider", "termination_type"):
+            if (circuit_termination.termination is not None
+                    and isinstance(circuit_termination.termination, ProviderNetwork)
+                    and circuit_termination.termination_id in nodes_provider_networks
+                    and circuit_termination.circuit_id in nodes_circuits):
+                provider = circuit_termination.circuit.provider
+                asn_str = ""
+                try:
+                    asns = list(provider.asns.all())
+                    if asns:
+                        asn_str = " · ".join(f"AS{a.asn}" for a in asns)
+                except Exception:
+                    pass
+
+                provider_label = provider.name if provider else "Unknown Provider"
+                if asn_str:
+                    provider_label = f"{provider_label} ({asn_str})"
+
+                edge_ids += 1
+                edges.append({
+                    "id": edge_ids,
+                    "from": f"c{circuit_termination.circuit_id}",
+                    "to": f"pn{circuit_termination.termination_id}",
+                    "color": "#9c27b0",
+                    "dashes": True,
+                    "connection_type": "isp",
+                    "smooth": not straight_cables,
+                    "title": (
+                        f"Circuit {circuit_termination.circuit.cid}"
+                        f"<br>Provider: {provider_label}"
+                    ),
+                })
 
     if show_power:
         power_panels_ids = PowerPanel.objects.filter(
@@ -768,6 +849,121 @@ def get_topology_data(
         if qs_device.pk not in nodes_devices and show_unconnected:
             nodes_devices[qs_device.pk] = qs_device
 
+    # ------------------------------------------------------------------ #
+    # ARP / MAC-table ghost nodes
+    # Devices visible in the L2 forwarding table of topology device
+    # interfaces, but not connected via any defined cable.
+    # ------------------------------------------------------------------ #
+    if show_arp_neighbors and _HAS_MAC_MODEL:
+        try:
+            interface_ct = ContentType.objects.get_for_model(Interface)
+            topology_iface_qs = Interface.objects.filter(
+                device_id__in=list(nodes_devices.keys())
+            ).values("id", "device_id")
+            topology_iface_ids = [i["id"] for i in topology_iface_qs]
+            iface_to_device   = {i["id"]: i["device_id"] for i in topology_iface_qs}
+
+            # Forwarding-table entries on topology interfaces (exclude stale)
+            learned_mac_entries = list(
+                NetBoxMACAddress.objects.filter(
+                    assigned_object_type=interface_ct,
+                    assigned_object_id__in=topology_iface_ids,
+                ).exclude(
+                    tags__slug="stale"
+                ).values("mac_address", "assigned_object_id")
+            )
+
+            if learned_mac_entries:
+                mac_to_learner_ifaces: Dict[str, set] = {}
+                for entry in learned_mac_entries:
+                    mac = str(entry["mac_address"]).lower()
+                    mac_to_learner_ifaces.setdefault(mac, set()).add(
+                        entry["assigned_object_id"]
+                    )
+
+                learned_macs = set(mac_to_learner_ifaces.keys())
+
+                # Find NetBox interfaces whose own MAC is in the learned set
+                ghost_iface_qs = Interface.objects.filter(
+                    mac_address__in=learned_macs
+                ).exclude(
+                    device_id__in=list(nodes_devices.keys())
+                ).select_related(
+                    "device",
+                    "device__role",
+                    "device__device_type",
+                    "device__site",
+                    "device__location",
+                    "device__rack",
+                    "device__tenant",
+                )
+
+                ghost_node_ids: set = set()
+
+                for ghost_iface in ghost_iface_qs:
+                    ghost_dev = ghost_iface.device
+                    if ghost_dev.id in nodes_devices or ghost_dev.id in ghost_node_ids:
+                        continue
+
+                    # Skip if ghost device is already cabled to a topology device
+                    ghost_cables_to_topology = CableTermination.objects.filter(
+                        cable_id__in=CableTermination.objects.filter(
+                            _device_id=ghost_dev.id
+                        ).values_list("cable_id", flat=True),
+                        _device_id__in=list(nodes_devices.keys()),
+                    ).exists()
+
+                    if ghost_cables_to_topology:
+                        continue
+
+                    ghost_node_ids.add(ghost_dev.id)
+                    ghost_mac = str(ghost_iface.mac_address).lower()
+
+                    # Find which topology device/interface learned this MAC
+                    learner_iface_ids = mac_to_learner_ifaces.get(ghost_mac, set())
+                    learner_device_id = None
+                    for lid in learner_iface_ids:
+                        learner_device_id = iface_to_device.get(lid)
+                        if learner_device_id:
+                            break
+
+                    if not learner_device_id:
+                        continue
+
+                    # Build the ghost node (reuse create_node, then mark it)
+                    ghost_node = create_node(
+                        ghost_dev, save_coords, node_label_items, group_id
+                    )
+                    ghost_node["ghost"] = True
+                    ghost_node["color"] = {
+                        "border":     "#FF8C00",
+                        "background": "#FFF3E0",
+                        "highlight":  {"border": "#E65100", "background": "#FFE0B2"},
+                    }
+                    ghost_node["borderWidth"] = 2
+                    ghost_node["borderWidthSelected"] = 3
+                    nodes.append(ghost_node)
+
+                    # Ghost edge: dashed orange, labelled with MAC
+                    edge_ids += 1
+                    edges.append({
+                        "id":              edge_ids,
+                        "from":            learner_device_id,
+                        "to":              ghost_dev.id,
+                        "color":           "#FF8C00",
+                        "dashes":          LinePattern.arp_ghost,
+                        "connection_type": "arp_ghost",
+                        "smooth":          not straight_cables,
+                        "title": (
+                            f"L2 visible (ARP/MAC table)"
+                            f"<br>MAC: {ghost_mac}"
+                            f"<br>No cable defined in NetBox"
+                        ),
+                    })
+        except Exception:
+            import traceback
+            traceback.print_exc()
+
     results = {}
 
     for d in nodes_devices.values():
@@ -802,7 +998,7 @@ class TopologyHomeView(PermissionRequiredMixin, View):
 
         if request.GET:
 
-            filter_id, ignore_cable_type, save_coords, show_unconnected, show_power, show_circuit, show_logical_connections, show_single_cable_logical_conns, show_cables, show_wireless, group_sites, group_locations, group_racks, group_virtualchassis, group, show_neighbors, straight_cables, draw_termination_labels, draw_cable_labels, grid_size, node_label_items = get_query_settings(request)
+            filter_id, ignore_cable_type, save_coords, show_unconnected, show_power, show_circuit, show_logical_connections, show_single_cable_logical_conns, show_cables, show_wireless, group_sites, group_locations, group_racks, group_virtualchassis, group, show_neighbors, straight_cables, draw_termination_labels, draw_cable_labels, grid_size, node_label_items, show_arp_neighbors = get_query_settings(request)
             
             filter_required = True
             empty_result = False
@@ -832,6 +1028,7 @@ class TopologyHomeView(PermissionRequiredMixin, View):
                     if draw_cable_labels == False and 'draw_cable_labels' in saved_filter_params: draw_cable_labels = saved_filter_params['draw_cable_labels']
                     if grid_size == 0 and 'grid_size' in saved_filter_params: grid_size = saved_filter_params['grid_size']
                     if node_label_items == () and 'node_label_items' in saved_filter_params: node_label_items = saved_filter_params['node_label_items']
+                    if show_arp_neighbors == False and 'show_arp_neighbors' in saved_filter_params: show_arp_neighbors = saved_filter_params['show_arp_neighbors']
                 except SavedFilter.DoesNotExist: # filter_id not found
                     pass
                 except Exception as inst:
@@ -871,6 +1068,7 @@ class TopologyHomeView(PermissionRequiredMixin, View):
                     draw_cable_labels=draw_cable_labels,
                     grid_size=grid_size,
                     node_label_items=node_label_items,
+                    show_arp_neighbors=show_arp_neighbors,
                 )
 
                 if topo_data is None or not topo_data["nodes"]:
@@ -904,6 +1102,7 @@ class TopologyHomeView(PermissionRequiredMixin, View):
             if individualOptions.straight_cables: q['straight_cables'] = "True"
             if individualOptions.draw_termination_labels: q['draw_termination_labels'] = "True"
             if individualOptions.draw_cable_labels: q['draw_cable_labels'] = "True"
+            if individualOptions.show_arp_neighbors: q['show_arp_neighbors'] = "True"
             if individualOptions.grid_size: q['grid_size'] = individualOptions.grid_size
             node_label_items = IndividualOptions.objects.get(id=individualOptions.id).node_label_items.translate({ord(i): None for i in '[]\''}).split(', ')
             if node_label_items == ['']: node_label_items = []

@@ -135,11 +135,13 @@ const coordSaveCheckbox = document.querySelector('#id_save_coords')
     // Metadata for each known connection type: label, edge color, SVG dash pattern, stroke width.
     // Dash patterns mirror the vis-network dashes arrays used in create_edge() on the backend.
     const CONNECTION_TYPE_META = {
-        cable:    { label: 'Physical Cable',     color: '#2b7ce9', dash: null,      width: 2 },
-        circuit:  { label: 'Circuit',            color: '#2b7ce9', dash: '6,3',     width: 2 },
-        wireless: { label: 'Wireless',           color: '#2b7ce9', dash: '2,8',     width: 2 },
-        power:    { label: 'Power',              color: '#2b7ce9', dash: '5,4,3,4', width: 2 },
-        logical:  { label: 'Logical Connection', color: '#f1c232', dash: '1,8',     width: 3 },
+        cable:      { label: 'Physical Cable',          color: '#2b7ce9', dash: null,      width: 2 },
+        circuit:    { label: 'Circuit',                 color: '#2b7ce9', dash: '6,3',     width: 2 },
+        isp:        { label: 'ISP / Provider Network',  color: '#9c27b0', dash: '6,3',     width: 2 },
+        wireless:   { label: 'Wireless',                color: '#2b7ce9', dash: '2,8',     width: 2 },
+        power:      { label: 'Power',                   color: '#2b7ce9', dash: '5,4,3,4', width: 2 },
+        logical:    { label: 'Logical Connection',      color: '#f1c232', dash: '1,8',     width: 3 },
+        arp_ghost:  { label: 'L2 Visible (no cable)',   color: '#FF8C00', dash: '4,5,4,5', width: 2 },
     }
 
     // Discover which types are actually present in this topology
@@ -185,7 +187,7 @@ const coordSaveCheckbox = document.querySelector('#id_save_coords')
             return svg
         }
 
-        const TYPE_ORDER = ['cable', 'circuit', 'wireless', 'power', 'logical']
+        const TYPE_ORDER = ['cable', 'circuit', 'isp', 'wireless', 'power', 'logical', 'arp_ghost']
         for (const type of TYPE_ORDER) {
             if (!presentConnectionTypes.has(type)) continue
             const meta = CONNECTION_TYPE_META[type]

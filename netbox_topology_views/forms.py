@@ -41,7 +41,7 @@ class DeviceFilterForm(
             'draw_termination_labels', 'draw_cable_labels', 'grid_size', 'node_label_items', name=_("Options")
         ),
         FieldSet(
-            'show_circuit', 'show_power', name=_("Additional filter-independent types (non-devices)")
+            'show_circuit', 'show_power', 'show_arp_neighbors', name=_("Additional filter-independent types (non-devices)")
         ),
         FieldSet('id', name=_("Device")),
         FieldSet('region_id', 'site_group_id', 'site_id', 'location_id', 'rack_id', name=_("Location")),
@@ -360,6 +360,17 @@ class DeviceFilterForm(
             choices=BOOLEAN_WITH_BLANK_CHOICES
         )
     )
+    show_arp_neighbors = forms.NullBooleanField(
+        label=_('Show ARP/MAC Neighbors (no cable)'), required=False, initial=False,
+        help_text=_(
+            'Displays devices visible in the L2 forwarding table (ARP/MAC) of topology '
+            'device interfaces that do not have a cable defined in NetBox. '
+            'Requires NetBox 4.1+ and MAC address sync via netbox-snmp-sync.'
+        ),
+        widget=forms.Select(
+            choices=BOOLEAN_WITH_BLANK_CHOICES
+        )
+    )
 
 class CoordinateGroupsForm(NetBoxModelForm):
     fieldsets = (
@@ -560,6 +571,7 @@ class IndividualOptionsForm(NetBoxModelForm):
            (
                 'show_circuit',
                 'show_power',
+                'show_arp_neighbors',
                 name=_("Additional filter-independent types (non-devices)")
             ),
     )
@@ -733,6 +745,16 @@ class IndividualOptionsForm(NetBoxModelForm):
             'color of the cable. This option depends on \'Show Cables\'. '
             'Be aware that Power Feeds cannot be filtered.')
     )
+    show_arp_neighbors = forms.BooleanField(
+        label=_('Show ARP/MAC Neighbors (no cable)'),
+        required=False,
+        initial=False,
+        help_text=_(
+            'Displays devices visible in the L2 forwarding table (ARP/MAC) of topology '
+            'device interfaces that do not have a cable defined in NetBox. '
+            'Shown as orange dashed edges. Requires NetBox 4.1+ and MAC address sync.'
+        )
+    )
 
     class Meta:
         model = IndividualOptions
@@ -741,6 +763,6 @@ class IndividualOptionsForm(NetBoxModelForm):
             'save_coords', 'show_unconnected', 'show_cables', 'show_wireless',
             'show_logical_connections', 'show_single_cable_logical_conns', 'show_neighbors',
             'group_sites', 'group_locations', 'group_racks', 'group_virtualchassis',
-            'draw_default_layout', 'straight_cables', 'draw_termination_labels', 'draw_cable_labels', 
-            'grid_size', 'node_label_items', 'show_circuit', 'show_power'
+            'draw_default_layout', 'straight_cables', 'draw_termination_labels', 'draw_cable_labels',
+            'grid_size', 'node_label_items', 'show_circuit', 'show_power', 'show_arp_neighbors'
         ]

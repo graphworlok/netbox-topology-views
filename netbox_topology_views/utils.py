@@ -214,12 +214,18 @@ def get_query_settings(request):
     if "node_label_items" in request.GET:
         node_label_items = request.GET.getlist('node_label_items')
 
-    return filter_id, ignore_cable_type, save_coords, show_unconnected, show_power, show_circuit, show_logical_connections, show_single_cable_logical_conns, show_cables, show_wireless, group_sites, group_locations, group_racks, group_virtualchassis, group, show_neighbors, straight_cables, draw_termination_labels, draw_cable_labels, grid_size, node_label_items
+    show_arp_neighbors = False
+    if "show_arp_neighbors" in request.GET:
+        if request.GET["show_arp_neighbors"] == "True":
+            show_arp_neighbors = True
+
+    return filter_id, ignore_cable_type, save_coords, show_unconnected, show_power, show_circuit, show_logical_connections, show_single_cable_logical_conns, show_cables, show_wireless, group_sites, group_locations, group_racks, group_virtualchassis, group, show_neighbors, straight_cables, draw_termination_labels, draw_cable_labels, grid_size, node_label_items, show_arp_neighbors
 
 class LinePattern():
     wireless = [2, 10, 2, 10]
     power = [5, 5, 3, 3]
     logical = [1, 10, 1, 10]
+    arp_ghost = [4, 6, 4, 6]   # orange dashed: L2 visible, no cable defined
 
     
 def export_data_to_xml(data: dict):
