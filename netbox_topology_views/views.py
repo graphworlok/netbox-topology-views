@@ -863,11 +863,42 @@ def get_topology_data(
             topology_iface_ids = [i["id"] for i in topology_iface_qs]
             iface_to_device   = {i["id"]: i["device_id"] for i in topology_iface_qs}
 
-            # Forwarding-table entries on topology interfaces (exclude stale)
+            # Exclude interfaces that are cabled to another topology device —
+            # MACs on inter-device uplinks/trunks are transiting, not directly attached.
+            # Strategy: find every cable that connects two topology devices, then
+            # exclude the interface IDs at both ends of those cables.
+            topology_device_id_set = set(nodes_devices.keys())
+
+            # Cables where BOTH ends attach to topology devices
+            inter_topo_cable_ids = set(
+                CableTermination.objects.filter(
+                    _device_id__in=topology_device_id_set
+                ).filter(
+                    cable_id__in=CableTermination.objects.filter(
+                        _device_id__in=topology_device_id_set
+                    ).values_list("cable_id", flat=True)
+                ).values_list("cable_id", flat=True)
+            )
+
+            # Interface (not port/console/power) termination IDs on those cables
+            uplink_iface_ids = set(
+                CableTermination.objects.filter(
+                    cable_id__in=inter_topo_cable_ids,
+                    _device_id__in=topology_device_id_set,
+                    termination_type__model="interface",
+                ).values_list("termination_id", flat=True)
+            )
+
+            # Only harvest MACs from interfaces that are NOT inter-topology uplinks
+            access_iface_ids = [
+                iid for iid in topology_iface_ids if iid not in uplink_iface_ids
+            ]
+
+            # Forwarding-table entries on access/uncabled interfaces only (exclude stale)
             learned_mac_entries = list(
                 NetBoxMACAddress.objects.filter(
                     assigned_object_type=interface_ct,
-                    assigned_object_id__in=topology_iface_ids,
+                    assigned_object_id__in=access_iface_ids,
                 ).exclude(
                     tags__slug="stale"
                 ).values("mac_address", "assigned_object_id")
