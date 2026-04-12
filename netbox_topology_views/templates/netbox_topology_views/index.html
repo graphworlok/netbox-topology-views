@@ -195,6 +195,8 @@
     const brokenImage = '{{ broken_image }}';
     const topologyData = {{ topology_data | safe }};
     const basePath = '{{ basepath }}';
+    const alertStatusUrl = '{% url "plugins:netbox_topology_views:alert_status" %}';
+    const influxdbConfigured = {{ settings.PLUGINS_CONFIG.netbox_topology_views.influxdb_url|yesno:"true,false" }};
 
     window.addEventListener("resize", resizeCanvas);
     resizeCanvas();

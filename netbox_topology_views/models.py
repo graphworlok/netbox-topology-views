@@ -390,6 +390,12 @@ class IndividualOptions(NetBoxModel):
     show_arp_neighbors = models.BooleanField(
         default=False
     )
+    show_l3_topology = models.BooleanField(
+        default=False
+    )
+    show_virtual_machines = models.BooleanField(
+        default=False
+    )
     group_sites = models.BooleanField(
         default=False
     )

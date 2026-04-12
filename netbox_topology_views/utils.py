@@ -219,7 +219,17 @@ def get_query_settings(request):
         if request.GET["show_arp_neighbors"] == "True":
             show_arp_neighbors = True
 
-    return filter_id, ignore_cable_type, save_coords, show_unconnected, show_power, show_circuit, show_logical_connections, show_single_cable_logical_conns, show_cables, show_wireless, group_sites, group_locations, group_racks, group_virtualchassis, group, show_neighbors, straight_cables, draw_termination_labels, draw_cable_labels, grid_size, node_label_items, show_arp_neighbors
+    show_l3_topology = False
+    if "show_l3_topology" in request.GET:
+        if request.GET["show_l3_topology"] == "True":
+            show_l3_topology = True
+
+    show_virtual_machines = False
+    if "show_virtual_machines" in request.GET:
+        if request.GET["show_virtual_machines"] == "True":
+            show_virtual_machines = True
+
+    return filter_id, ignore_cable_type, save_coords, show_unconnected, show_power, show_circuit, show_logical_connections, show_single_cable_logical_conns, show_cables, show_wireless, group_sites, group_locations, group_racks, group_virtualchassis, group, show_neighbors, straight_cables, draw_termination_labels, draw_cable_labels, grid_size, node_label_items, show_arp_neighbors, show_l3_topology, show_virtual_machines
 
 class LinePattern():
     wireless = [2, 10, 2, 10]

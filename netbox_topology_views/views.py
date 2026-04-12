@@ -456,6 +456,8 @@ def get_topology_data(
     grid_size: list,
     node_label_items: list,
     show_arp_neighbors: bool = False,
+    show_l3_topology: bool = False,
+    show_virtual_machines: bool = False,
 ):
     
     supported_termination_types = []
@@ -995,6 +997,175 @@ def get_topology_data(
             import traceback
             traceback.print_exc()
 
+    # ------------------------------------------------------------------ #
+    # L3 topology — subnet nodes connecting devices that share an IP subnet
+    # ------------------------------------------------------------------ #
+    if show_l3_topology:
+        try:
+            from ipaddress import ip_interface as _parse_ip
+            from ipam.models import IPAddress as _IPAddress
+
+            iface_ct = ContentType.objects.get_for_model(Interface)
+            topo_iface_map = dict(
+                Interface.objects.filter(
+                    device_id__in=list(nodes_devices.keys())
+                ).values_list("id", "device_id")
+            )
+
+            dev_ips = _IPAddress.objects.filter(
+                assigned_object_type=iface_ct,
+                assigned_object_id__in=list(topo_iface_map.keys()),
+            ).values("address", "assigned_object_id")
+
+            # Group by network — {net_str: {device_id: ip_str}}
+            subnet_map: Dict[str, Dict[int, str]] = {}
+            for entry in dev_ips:
+                iface_id = entry["assigned_object_id"]
+                dev_id = topo_iface_map.get(iface_id)
+                if not dev_id:
+                    continue
+                net = _parse_ip(str(entry["address"])).network
+                # Skip /32 and /128 — single-host addresses can't form shared subnets
+                if net.prefixlen in (32, 128):
+                    continue
+                net_str = str(net)
+                subnet_map.setdefault(net_str, {})[dev_id] = str(entry["address"])
+
+            for net_str, dev_ip_map in subnet_map.items():
+                if len(dev_ip_map) < 2:
+                    continue  # only draw when ≥2 topology devices share the subnet
+
+                prefix_node_id = f"l3_{net_str.replace('/', '_').replace('.', '_').replace(':', '_')}"
+                nodes.append({
+                    "id":      prefix_node_id,
+                    "name":    net_str,
+                    "label":   net_str,
+                    "shape":   "image",
+                    "size":    22,
+                    "image":   find_image_url("prefix"),
+                    "title":   (
+                        f"<table><tbody>"
+                        f"<tr><th>Subnet:</th><td>{net_str}</td></tr>"
+                        f"<tr><th>Devices:</th><td>{len(dev_ip_map)}</td></tr>"
+                        f"</tbody></table>"
+                    ),
+                    "href":    "",
+                    "physics": True,
+                    "x":       0,
+                    "y":       0,
+                    "color":   {
+                        "border":     "#4CAF50",
+                        "background": "#E8F5E9",
+                        "highlight":  {"border": "#1B5E20", "background": "#C8E6C9"},
+                    },
+                    "label_num_lines": 1,
+                })
+
+                for dev_id, ip_str in dev_ip_map.items():
+                    edge_ids += 1
+                    edges.append({
+                        "id":              edge_ids,
+                        "from":            dev_id,
+                        "to":              prefix_node_id,
+                        "color":           "#4CAF50",
+                        "connection_type": "l3_prefix",
+                        "smooth":          not straight_cables,
+                        "label":           ip_str.split("/")[0],
+                        "title":           f"IP: {ip_str}<br>Subnet: {net_str}",
+                        "width":           1,
+                    })
+        except Exception:
+            import traceback
+            traceback.print_exc()
+
+    # ------------------------------------------------------------------ #
+    # Virtual machine placement
+    # VMs with a direct device assignment, or in a cluster hosted on topology devices
+    # ------------------------------------------------------------------ #
+    if show_virtual_machines:
+        try:
+            from virtualization.models import VirtualMachine as _VM
+
+            topo_dev_ids = list(nodes_devices.keys())
+
+            # Cluster → first topology device mapping (for cluster-hosted VMs)
+            cluster_host_map: Dict[int, int] = {}
+            for dev in nodes_devices.values():
+                if hasattr(dev, "cluster_id") and dev.cluster_id and dev.cluster_id not in cluster_host_map:
+                    cluster_host_map[dev.cluster_id] = dev.pk
+
+            vm_qs = _VM.objects.filter(
+                Q(device_id__in=topo_dev_ids) |
+                Q(cluster_id__in=list(cluster_host_map.keys()), device__isnull=True)
+            ).select_related(
+                "role", "cluster", "primary_ip4", "primary_ip6", "tenant", "site", "device"
+            )
+
+            seen_vm_ids: set = set()
+            for vm in vm_qs:
+                if vm.pk in seen_vm_ids:
+                    continue
+                seen_vm_ids.add(vm.pk)
+
+                # Determine host device node ID
+                if vm.device_id and vm.device_id in nodes_devices:
+                    host_id = vm.device_id
+                elif vm.cluster_id and vm.cluster_id in cluster_host_map:
+                    host_id = cluster_host_map[vm.cluster_id]
+                else:
+                    continue
+
+                # Build tooltip
+                vm_content = f"<tr><th>Status:</th><td>{vm.status}</td></tr>"
+                if vm.primary_ip4:
+                    vm_content += f"<tr><th>IP:</th><td>{vm.primary_ip4.address}</td></tr>"
+                elif vm.primary_ip6:
+                    vm_content += f"<tr><th>IPv6:</th><td>{vm.primary_ip6.address}</td></tr>"
+                if vm.cluster:
+                    vm_content += f"<tr><th>Cluster:</th><td>{vm.cluster.name}</td></tr>"
+                if vm.tenant:
+                    vm_content += f"<tr><th>Tenant:</th><td>{vm.tenant.name}</td></tr>"
+                if vm.site:
+                    vm_content += f"<tr><th>Site:</th><td>{vm.site.name}</td></tr>"
+
+                vm_image = find_image_url(vm.role.slug if vm.role else "virtual-machine")
+
+                nodes.append({
+                    "id":      f"vm{vm.pk}",
+                    "name":    vm.name,
+                    "label":   vm.name,
+                    "shape":   "image",
+                    "size":    20,
+                    "image":   vm_image,
+                    "title":   f"<table><tbody>{vm_content}</tbody></table>",
+                    "href":    vm.get_absolute_url(),
+                    "physics": True,
+                    "x":       0,
+                    "y":       0,
+                    "color":   {
+                        "border":     "#4CAF50",
+                        "background": "#E8F5E9",
+                        "highlight":  {"border": "#2E7D32", "background": "#C8E6C9"},
+                    },
+                    "label_num_lines": 1,
+                })
+
+                edge_ids += 1
+                edges.append({
+                    "id":              edge_ids,
+                    "from":            f"vm{vm.pk}",
+                    "to":              host_id,
+                    "color":           "#4CAF50",
+                    "dashes":          [5, 3],
+                    "connection_type": "vm_host",
+                    "smooth":          not straight_cables,
+                    "title":           f"VM: {vm.name}<br>Hosted on: {nodes_devices[host_id].name}",
+                    "width":           1,
+                })
+        except Exception:
+            import traceback
+            traceback.print_exc()
+
     results = {}
 
     for d in nodes_devices.values():
@@ -1005,6 +1176,106 @@ def get_topology_data(
     results["group"] = group_id
     results["options"] = options
     return results
+
+
+class AlertStatusView(PermissionRequiredMixin, View):
+    """
+    Proxy endpoint that queries InfluxDB/Collectd for device heartbeats and
+    returns a JSON object listing hosts that reported recently.
+    Used by the topology frontend for the real-time status colour overlay.
+    """
+    permission_required = ("dcim.view_device",)
+
+    def get(self, request):
+        from django.http import JsonResponse
+        influxdb_url = CONFIG.get("influxdb_url", "")
+        if not influxdb_url:
+            return JsonResponse({"configured": False})
+
+        influxdb_token    = CONFIG.get("influxdb_token", "")
+        influxdb_org      = CONFIG.get("influxdb_org", "")
+        influxdb_bucket   = CONFIG.get("influxdb_bucket", "")
+        influxdb_database = CONFIG.get("influxdb_database", "")
+        measurement       = CONFIG.get("influxdb_measurement", "cpu_value")
+        host_tag          = CONFIG.get("influxdb_host_tag", "host")
+        stale_minutes     = int(CONFIG.get("influxdb_stale_minutes", 15))
+
+        try:
+            import requests as _req
+
+            if influxdb_token:
+                # InfluxDB 2.x — Flux query returns active hosts as CSV
+                flux = (
+                    f'from(bucket: "{influxdb_bucket}")'
+                    f'  |> range(start: -{stale_minutes}m)'
+                    f'  |> filter(fn: (r) => r["_measurement"] == "{measurement}")'
+                    f'  |> keep(columns: ["{host_tag}"])'
+                    f'  |> distinct(column: "{host_tag}")'
+                )
+                resp = _req.post(
+                    f"{influxdb_url.rstrip('/')}/api/v2/query",
+                    params={"org": influxdb_org},
+                    headers={
+                        "Authorization": f"Token {influxdb_token}",
+                        "Content-Type": "application/vnd.flux",
+                        "Accept":        "application/csv",
+                    },
+                    data=flux,
+                    timeout=10,
+                )
+                resp.raise_for_status()
+
+                active_hosts = set()
+                header = None
+                host_col = None
+                for line in resp.text.splitlines():
+                    if not line or line.startswith("#"):
+                        header = None
+                        continue
+                    parts = line.split(",")
+                    if header is None:
+                        header = parts
+                        try:
+                            host_col = header.index(host_tag)
+                        except ValueError:
+                            # Column might be last or unnamed — fall back to last
+                            host_col = len(parts) - 1
+                        continue
+                    if host_col is not None and host_col < len(parts):
+                        h = parts[host_col].strip()
+                        if h:
+                            active_hosts.add(h)
+            else:
+                # InfluxDB 1.x — InfluxQL
+                influxql = (
+                    f'SELECT last(value) FROM "{measurement}" '
+                    f'WHERE time > now() - {stale_minutes}m '
+                    f'GROUP BY "{host_tag}"'
+                )
+                resp = _req.get(
+                    f"{influxdb_url.rstrip('/')}/query",
+                    params={"db": influxdb_database, "q": influxql, "epoch": "s"},
+                    timeout=10,
+                )
+                resp.raise_for_status()
+                data = resp.json()
+                active_hosts = set()
+                for result in data.get("results", []):
+                    for series in result.get("series", []):
+                        h = series.get("tags", {}).get(host_tag, "")
+                        if h:
+                            active_hosts.add(h)
+
+            return JsonResponse({
+                "configured":   True,
+                "active_hosts": list(active_hosts),
+                "stale_minutes": stale_minutes,
+            })
+
+        except Exception:
+            import traceback
+            traceback.print_exc()
+            return JsonResponse({"configured": True, "error": "Query failed"})
 
 
 class TopologyHomeView(PermissionRequiredMixin, View):
@@ -1029,7 +1300,7 @@ class TopologyHomeView(PermissionRequiredMixin, View):
 
         if request.GET:
 
-            filter_id, ignore_cable_type, save_coords, show_unconnected, show_power, show_circuit, show_logical_connections, show_single_cable_logical_conns, show_cables, show_wireless, group_sites, group_locations, group_racks, group_virtualchassis, group, show_neighbors, straight_cables, draw_termination_labels, draw_cable_labels, grid_size, node_label_items, show_arp_neighbors = get_query_settings(request)
+            filter_id, ignore_cable_type, save_coords, show_unconnected, show_power, show_circuit, show_logical_connections, show_single_cable_logical_conns, show_cables, show_wireless, group_sites, group_locations, group_racks, group_virtualchassis, group, show_neighbors, straight_cables, draw_termination_labels, draw_cable_labels, grid_size, node_label_items, show_arp_neighbors, show_l3_topology, show_virtual_machines = get_query_settings(request)
             
             filter_required = True
             empty_result = False
@@ -1060,6 +1331,8 @@ class TopologyHomeView(PermissionRequiredMixin, View):
                     if grid_size == 0 and 'grid_size' in saved_filter_params: grid_size = saved_filter_params['grid_size']
                     if node_label_items == () and 'node_label_items' in saved_filter_params: node_label_items = saved_filter_params['node_label_items']
                     if show_arp_neighbors == False and 'show_arp_neighbors' in saved_filter_params: show_arp_neighbors = saved_filter_params['show_arp_neighbors']
+                    if show_l3_topology == False and 'show_l3_topology' in saved_filter_params: show_l3_topology = saved_filter_params['show_l3_topology']
+                    if show_virtual_machines == False and 'show_virtual_machines' in saved_filter_params: show_virtual_machines = saved_filter_params['show_virtual_machines']
                 except SavedFilter.DoesNotExist: # filter_id not found
                     pass
                 except Exception as inst:
@@ -1100,6 +1373,8 @@ class TopologyHomeView(PermissionRequiredMixin, View):
                     grid_size=grid_size,
                     node_label_items=node_label_items,
                     show_arp_neighbors=show_arp_neighbors,
+                    show_l3_topology=show_l3_topology,
+                    show_virtual_machines=show_virtual_machines,
                 )
 
                 if topo_data is None or not topo_data["nodes"]:
@@ -1134,6 +1409,8 @@ class TopologyHomeView(PermissionRequiredMixin, View):
             if individualOptions.draw_termination_labels: q['draw_termination_labels'] = "True"
             if individualOptions.draw_cable_labels: q['draw_cable_labels'] = "True"
             if individualOptions.show_arp_neighbors: q['show_arp_neighbors'] = "True"
+            if individualOptions.show_l3_topology: q['show_l3_topology'] = "True"
+            if individualOptions.show_virtual_machines: q['show_virtual_machines'] = "True"
             if individualOptions.grid_size: q['grid_size'] = individualOptions.grid_size
             node_label_items = IndividualOptions.objects.get(id=individualOptions.id).node_label_items.translate({ord(i): None for i in '[]\''}).split(', ')
             if node_label_items == ['']: node_label_items = []

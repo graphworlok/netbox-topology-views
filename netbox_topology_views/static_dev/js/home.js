@@ -142,6 +142,8 @@ const coordSaveCheckbox = document.querySelector('#id_save_coords')
         power:      { label: 'Power',                   color: '#2b7ce9', dash: '5,4,3,4', width: 2 },
         logical:    { label: 'Logical Connection',      color: '#f1c232', dash: '1,8',     width: 3 },
         arp_ghost:  { label: 'L2 Visible (no cable)',   color: '#FF8C00', dash: '4,5,4,5', width: 2 },
+        vm_host:    { label: 'VM Hosted On',             color: '#4CAF50', dash: '5,3',     width: 1 },
+        l3_prefix:  { label: 'L3 Subnet',               color: '#4CAF50', dash: null,      width: 1 },
     }
 
     // Discover which types are actually present in this topology
@@ -187,7 +189,7 @@ const coordSaveCheckbox = document.querySelector('#id_save_coords')
             return svg
         }
 
-        const TYPE_ORDER = ['cable', 'circuit', 'isp', 'wireless', 'power', 'logical', 'arp_ghost']
+        const TYPE_ORDER = ['cable', 'circuit', 'isp', 'wireless', 'power', 'logical', 'arp_ghost', 'vm_host', 'l3_prefix']
         for (const type of TYPE_ORDER) {
             if (!presentConnectionTypes.has(type)) continue
             const meta = CONNECTION_TYPE_META[type]
@@ -221,6 +223,92 @@ const coordSaveCheckbox = document.querySelector('#id_save_coords')
         legendObserver.observe(document.documentElement, {
             attributes: true, attributeFilter: ['data-bs-theme']
         })
+    }
+
+    // ---- Real-time device status overlay (InfluxDB/Collectd) ----
+    if (typeof influxdbConfigured !== 'undefined' && influxdbConfigured && typeof alertStatusUrl !== 'undefined') {
+        const STATUS_COLORS = {
+            online:  { border: '#4CAF50', background: '#E8F5E9', highlight: { border: '#1B5E20', background: '#C8E6C9' } },
+            offline: { border: '#f44336', background: '#FFEBEE', highlight: { border: '#B71C1C', background: '#FFCDD2' } },
+        }
+
+        // Map node name → node id for quick lookup
+        const nameToNodeId = {}
+        for (let [id, node] of nodes._data) {
+            if (node.name) nameToNodeId[node.name] = id
+        }
+
+        // Store original border colors so we can restore them when a device comes back
+        const originalColors = {}
+
+        // Status badge element in top-right of graph
+        const statusBadge = document.createElement('div')
+        statusBadge.id = 'alert-status-badge'
+        statusBadge.style.cssText = (
+            'position:absolute;top:12px;right:12px;z-index:20;padding:4px 10px;'
+            'border-radius:4px;font-size:12px;font-weight:600;pointer-events:none;'
+            'background:#6c757d;color:#fff;'
+        )
+        statusBadge.textContent = 'Status: loading…'
+        container.style.position = 'relative'
+        container.appendChild(statusBadge)
+
+        async function refreshAlertStatus() {
+            try {
+                const resp = await fetch(alertStatusUrl)
+                if (!resp.ok) return
+                const data = await resp.json()
+                if (!data.configured) {
+                    statusBadge.style.display = 'none'
+                    return
+                }
+                if (data.error) {
+                    statusBadge.textContent = 'Status: error'
+                    statusBadge.style.background = '#dc3545'
+                    return
+                }
+
+                const activeSet = new Set((data.active_hosts || []).map(h => h.toLowerCase()))
+                const staleMin  = data.stale_minutes || 15
+                const updates   = []
+                let offlineCount = 0
+
+                for (let [id, node] of nodes._data) {
+                    if (!node.name || node.ghost) continue
+                    const nameLower = node.name.toLowerCase()
+                    // Also try matching on just the hostname part (strip domain)
+                    const shortName = nameLower.split('.')[0]
+                    const isOnline  = activeSet.has(nameLower) || activeSet.has(shortName)
+
+                    if (!isOnline) {
+                        if (!originalColors[id]) originalColors[id] = node.color || null
+                        updates.push({ id, color: STATUS_COLORS.offline })
+                        offlineCount++
+                    } else {
+                        if (originalColors[id] !== undefined) {
+                            updates.push({ id, color: originalColors[id] })
+                            delete originalColors[id]
+                        }
+                    }
+                }
+
+                if (updates.length > 0) nodes.update(updates)
+
+                if (offlineCount > 0) {
+                    statusBadge.textContent = `${offlineCount} offline (>${staleMin}m silent)`
+                    statusBadge.style.background = '#dc3545'
+                } else {
+                    statusBadge.textContent = 'All devices online'
+                    statusBadge.style.background = '#198754'
+                }
+            } catch (_) {
+                statusBadge.textContent = 'Status: unavailable'
+                statusBadge.style.background = '#6c757d'
+            }
+        }
+
+        refreshAlertStatus()
+        setInterval(refreshAlertStatus, 60_000)
     }
 
     function getGridPosition(nodeId, gridSize) {

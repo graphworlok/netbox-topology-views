@@ -41,7 +41,8 @@ class DeviceFilterForm(
             'draw_termination_labels', 'draw_cable_labels', 'grid_size', 'node_label_items', name=_("Options")
         ),
         FieldSet(
-            'show_circuit', 'show_power', 'show_arp_neighbors', name=_("Additional filter-independent types (non-devices)")
+            'show_circuit', 'show_power', 'show_arp_neighbors', 'show_virtual_machines', 'show_l3_topology',
+            name=_("Additional filter-independent types (non-devices)")
         ),
         FieldSet('id', name=_("Device")),
         FieldSet('region_id', 'site_group_id', 'site_id', 'location_id', 'rack_id', name=_("Location")),
@@ -371,6 +372,28 @@ class DeviceFilterForm(
             choices=BOOLEAN_WITH_BLANK_CHOICES
         )
     )
+    show_virtual_machines = forms.NullBooleanField(
+        label=_('Show Virtual Machines'), required=False, initial=False,
+        help_text=_(
+            'Displays virtual machines hosted on topology devices. VMs are shown as '
+            'smaller green-bordered nodes connected to their host device. Supports both '
+            'direct device assignment (NetBox 3.7+) and cluster-based placement.'
+        ),
+        widget=forms.Select(
+            choices=BOOLEAN_WITH_BLANK_CHOICES
+        )
+    )
+    show_l3_topology = forms.NullBooleanField(
+        label=_('Show L3 Topology (IP Subnets)'), required=False, initial=False,
+        help_text=_(
+            'Adds subnet nodes connecting topology devices that share an IP subnet. '
+            'Devices with interface IPs in the same subnet are connected via a prefix '
+            'node showing the subnet address. Useful for visualising L3 adjacency.'
+        ),
+        widget=forms.Select(
+            choices=BOOLEAN_WITH_BLANK_CHOICES
+        )
+    )
 
 class CoordinateGroupsForm(NetBoxModelForm):
     fieldsets = (
@@ -572,6 +595,8 @@ class IndividualOptionsForm(NetBoxModelForm):
                 'show_circuit',
                 'show_power',
                 'show_arp_neighbors',
+                'show_virtual_machines',
+                'show_l3_topology',
                 name=_("Additional filter-independent types (non-devices)")
             ),
     )
@@ -755,6 +780,24 @@ class IndividualOptionsForm(NetBoxModelForm):
             'Shown as orange dashed edges. Requires NetBox 4.1+ and MAC address sync.'
         )
     )
+    show_virtual_machines = forms.BooleanField(
+        label=_('Show Virtual Machines'),
+        required=False,
+        initial=False,
+        help_text=_(
+            'Displays virtual machines hosted on topology devices. VMs are shown as '
+            'smaller green-bordered nodes connected to their host device.'
+        )
+    )
+    show_l3_topology = forms.BooleanField(
+        label=_('Show L3 Topology (IP Subnets)'),
+        required=False,
+        initial=False,
+        help_text=_(
+            'Adds subnet nodes connecting topology devices that share an IP subnet on '
+            'their interfaces. Edges are labelled with the interface IP address.'
+        )
+    )
 
     class Meta:
         model = IndividualOptions
@@ -764,5 +807,6 @@ class IndividualOptionsForm(NetBoxModelForm):
             'show_logical_connections', 'show_single_cable_logical_conns', 'show_neighbors',
             'group_sites', 'group_locations', 'group_racks', 'group_virtualchassis',
             'draw_default_layout', 'straight_cables', 'draw_termination_labels', 'draw_cable_labels',
-            'grid_size', 'node_label_items', 'show_circuit', 'show_power', 'show_arp_neighbors'
+            'grid_size', 'node_label_items', 'show_circuit', 'show_power', 'show_arp_neighbors',
+            'show_virtual_machines', 'show_l3_topology',
         ]
