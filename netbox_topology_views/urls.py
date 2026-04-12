@@ -9,6 +9,8 @@ urlpatterns = (
     path("", RedirectView.as_view(url="topology/", permanent=True)),
     path("topology/", views.TopologyHomeView.as_view(), name="home"),
     path("alert-status/", views.AlertStatusView.as_view(), name="alert_status"),
+    path("metrics/", views.MetricsView.as_view(), name="metrics"),
+    path("vulnerabilities/", views.VulnerabilityView.as_view(), name="vulnerabilities"),
     path("images/", views.TopologyImagesView.as_view(), name="images"),
     path("individualoptions/", views.TopologyIndividualOptionsView.as_view(), name="individualoptions"),
 

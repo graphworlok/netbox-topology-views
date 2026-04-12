@@ -81,6 +81,36 @@
   }
   .connection-legend-row:last-child { margin-bottom: 0; }
   .connection-legend-row input[type="checkbox"] { cursor: pointer; }
+
+  /* View type legend (right side of graph, no checkboxes) */
+  .view-legend {
+    position: absolute;
+    bottom: 16px;
+    right: 16px;
+    z-index: 10;
+    padding: 10px 14px;
+    font-size: 13px;
+    min-width: 170px;
+    max-height: 320px;
+    overflow-y: auto;
+    pointer-events: auto;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.20);
+  }
+  .view-legend-title { font-weight: 600; margin-bottom: 8px; }
+  .view-legend-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 5px;
+  }
+  .view-legend-row:last-child { margin-bottom: 0; }
+  .view-legend-swatch {
+    display: inline-block;
+    width: 14px;
+    height: 14px;
+    border-radius: 3px;
+    flex-shrink: 0;
+  }
 </style>
 {% endblock %} 
 
@@ -124,6 +154,22 @@
 			<button type="button" class="btn btn-secondary" id="btnPhysicsSettings" title="Physics settings">
 				<i class="mdi mdi-tune-vertical"></i> Physics
 			</button>
+			<div class="btn-group">
+				<button type="button" class="btn btn-secondary dropdown-toggle" data-bs-toggle="dropdown" aria-expanded="false" id="btnViewType" title="Topology view type — overlays colour data on nodes">
+					<i class="mdi mdi-layers-outline"></i> View: Default
+				</button>
+				<ul class="dropdown-menu">
+					<li><h6 class="dropdown-header">Built-in</h6></li>
+					<li><a class="dropdown-item view-type-btn active" href="#" data-view="physical">Physical (Default)</a></li>
+					<li><a class="dropdown-item view-type-btn" href="#" data-view="device_status">Device Status</a></li>
+					<li><a class="dropdown-item view-type-btn" href="#" data-view="platform">Platform / OS</a></li>
+					<li><a class="dropdown-item view-type-btn" href="#" data-view="tenant">Tenant</a></li>
+					<li><hr class="dropdown-divider"></li>
+					<li><h6 class="dropdown-header">Data overlays</h6></li>
+					<li><a class="dropdown-item view-type-btn" href="#" data-view="metrics_cpu" title="Requires InfluxDB configured in PLUGINS_CONFIG">Metrics: CPU</a></li>
+					<li><a class="dropdown-item view-type-btn" href="#" data-view="vulnerability" title="Requires vuln_cf_score or vuln_cf_severity custom fields">Vulnerability</a></li>
+				</ul>
+			</div>
 			<a id="btnDownloadXml" class="btn btn-info" href="#">
 				<i class="mdi mdi-download"></i>
 				Download XML
@@ -196,6 +242,8 @@
     const topologyData = {{ topology_data | safe }};
     const basePath = '{{ basepath }}';
     const alertStatusUrl = '{% url "plugins:netbox_topology_views:alert_status" %}';
+    const metricsUrl = '{% url "plugins:netbox_topology_views:metrics" %}';
+    const vulnUrl = '{% url "plugins:netbox_topology_views:vulnerabilities" %}';
     const influxdbConfigured = {{ settings.PLUGINS_CONFIG.netbox_topology_views.influxdb_url|yesno:"true,false" }};
 
     window.addEventListener("resize", resizeCanvas);

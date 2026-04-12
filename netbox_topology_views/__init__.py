@@ -24,6 +24,11 @@ class TopologyViewsConfig(PluginConfig):
         "influxdb_measurement": "cpu_value",  # measurement used for heartbeat detection
         "influxdb_host_tag": "host",  # Collectd tag that holds the hostname
         "influxdb_stale_minutes": 15, # minutes of silence before device is "offline"
+        "influxdb_cpu_idle_instance": "idle",  # Collectd type_instance value for idle CPU
+        # Vulnerability overlay — set custom field slugs to enable
+        "vuln_cf_score": "",     # NetBox custom field slug holding a CVSS score (0-10 float)
+        "vuln_cf_severity": "",  # NetBox custom field slug holding severity string
+                                 #   (critical/high/medium/low/none)
     }
 
     def ready(self):

@@ -311,6 +311,326 @@ const coordSaveCheckbox = document.querySelector('#id_save_coords')
         setInterval(refreshAlertStatus, 60_000)
     }
 
+    // ================================================================
+    // View Type Overlay System
+    // Applies colour overlays to nodes based on different data sources.
+    // Physical (default), Device Status, Platform, Tenant, CPU Metrics,
+    // and Vulnerability views are built in.
+    // ================================================================
+    ;(function initViewTypes() {
+
+        // --- Colour palette for hashed string → colour (platform, tenant) ---
+        const PALETTE = [
+            '#2196F3', '#4CAF50', '#FF9800', '#9C27B0', '#F44336',
+            '#00BCD4', '#8BC34A', '#FF5722', '#3F51B5', '#E91E63',
+            '#009688', '#795548', '#607D8B', '#FF4081', '#1565C0',
+        ]
+
+        const STATUS_COLORS = {
+            active:          '#4CAF50',
+            planned:         '#9E9E9E',
+            staged:          '#2196F3',
+            inventory:       '#00BCD4',
+            decommissioning: '#FF9800',
+            offline:         '#f44336',
+            failed:          '#B71C1C',
+        }
+
+        const VULN_COLORS = {
+            critical: '#B71C1C',
+            high:     '#f44336',
+            medium:   '#FF9800',
+            low:      '#FFC107',
+            none:     '#4CAF50',
+            info:     '#2196F3',
+        }
+
+        // --- Colour helpers ---
+
+        // Build a vis-network colour object from a single border hex.
+        // Background is blended 25% toward white; highlight border is darkened.
+        function makeColor(borderHex) {
+            if (!borderHex || borderHex === 'undefined') return null
+            const r = parseInt(borderHex.slice(1, 3), 16)
+            const g = parseInt(borderHex.slice(3, 5), 16)
+            const b = parseInt(borderHex.slice(5, 7), 16)
+            const blend = (c, f) => Math.round(c * f + 255 * (1 - f)).toString(16).padStart(2, '0')
+            const darken = (c)  => Math.round(c * 0.65).toString(16).padStart(2, '0')
+            return {
+                border:     borderHex,
+                background: '#' + [r, g, b].map(c => blend(c, 0.22)).join(''),
+                highlight: {
+                    border:     '#' + [r, g, b].map(c => darken(c)).join(''),
+                    background: '#' + [r, g, b].map(c => blend(c, 0.35)).join(''),
+                },
+            }
+        }
+
+        // Grade a 0-100 percentage into a traffic-light colour
+        function gradeColor(pct) {
+            if (pct === null || pct === undefined) return '#9E9E9E'
+            if (pct < 60) return '#4CAF50'
+            if (pct < 80) return '#FFC107'
+            if (pct < 90) return '#FF9800'
+            return '#f44336'
+        }
+
+        // Stable string → palette index
+        function hashIdx(str) {
+            let h = 0
+            for (let i = 0; i < str.length; i++) h = (Math.imul(31, h) + str.charCodeAt(i)) | 0
+            return Math.abs(h) % PALETTE.length
+        }
+
+        // CVSS score → severity bucket
+        function scoreToSev(score) {
+            if (!score && score !== 0) return 'unknown'
+            if (score >= 9.0) return 'critical'
+            if (score >= 7.0) return 'high'
+            if (score >= 4.0) return 'medium'
+            if (score >  0)   return 'low'
+            return 'none'
+        }
+
+        // --- Store original node colours once (before any overlay) ---
+        const originalColors = {}
+        for (const [id, node] of nodes._data) {
+            originalColors[id] = node.color !== undefined ? node.color : null
+        }
+
+        // Remote data cache keyed by view type
+        const dataCache = {}
+
+        // The current view legend element (right side of graph)
+        let viewLegendEl = null
+
+        // --- Build view legend (right side) ---
+        function buildViewLegend(items, title) {
+            if (viewLegendEl) { viewLegendEl.remove(); viewLegendEl = null }
+            if (!items || items.length === 0) return
+
+            viewLegendEl = document.createElement('div')
+            viewLegendEl.className = 'view-legend card'
+
+            const titleEl = document.createElement('div')
+            titleEl.className = 'view-legend-title'
+            titleEl.textContent = title
+            viewLegendEl.appendChild(titleEl)
+
+            for (const { label, color } of items) {
+                const row = document.createElement('div')
+                row.className = 'view-legend-row'
+                const swatch = document.createElement('span')
+                swatch.className = 'view-legend-swatch'
+                swatch.style.background = color
+                const text = document.createElement('span')
+                text.textContent = label
+                row.appendChild(swatch)
+                row.appendChild(text)
+                viewLegendEl.appendChild(row)
+            }
+
+            container.style.position = 'relative'
+            container.appendChild(viewLegendEl)
+        }
+
+        // --- Apply a colour mapper to all non-ghost nodes ---
+        function applyOverlay(mapper) {
+            const updates = []
+            for (const [id, node] of nodes._data) {
+                if (node.ghost) continue
+                const color = mapper(node)
+                updates.push({ id, color: color !== undefined ? color : originalColors[id] })
+            }
+            nodes.update(updates)
+        }
+
+        // ---- Individual view type implementations ----
+
+        function applyPhysical() {
+            applyOverlay(node => originalColors[node.id])
+            buildViewLegend(null, '')
+        }
+
+        function applyDeviceStatus() {
+            applyOverlay(node => {
+                const base = STATUS_COLORS[node.device_status] || '#9E9E9E'
+                return makeColor(base)
+            })
+            const legendItems = [
+                ...Object.entries(STATUS_COLORS).map(([k, c]) => ({
+                    label: k.charAt(0).toUpperCase() + k.slice(1), color: c
+                })),
+                { label: 'Unknown', color: '#9E9E9E' },
+            ]
+            buildViewLegend(legendItems, 'Device Status')
+        }
+
+        function applyPlatform() {
+            const slugColors = {}
+            for (const [, node] of nodes._data) {
+                if (node.platform_slug && !(node.platform_slug in slugColors))
+                    slugColors[node.platform_slug] = PALETTE[hashIdx(node.platform_slug)]
+            }
+            applyOverlay(node => {
+                const base = node.platform_slug ? (slugColors[node.platform_slug] || '#9E9E9E') : '#9E9E9E'
+                return makeColor(base)
+            })
+            const legendItems = Object.entries(slugColors)
+                .sort(([a], [b]) => a.localeCompare(b))
+                .map(([slug, color]) => ({ label: slug || '(none)', color }))
+            legendItems.push({ label: '(no platform)', color: '#9E9E9E' })
+            buildViewLegend(legendItems, 'Platform / OS')
+        }
+
+        function applyTenant() {
+            const slugColors = {}
+            for (const [, node] of nodes._data) {
+                if (node.tenant_slug && !(node.tenant_slug in slugColors))
+                    slugColors[node.tenant_slug] = PALETTE[hashIdx(node.tenant_slug)]
+            }
+            applyOverlay(node => {
+                const base = node.tenant_slug ? (slugColors[node.tenant_slug] || '#9E9E9E') : '#9E9E9E'
+                return makeColor(base)
+            })
+            const legendItems = Object.entries(slugColors)
+                .sort(([a], [b]) => a.localeCompare(b))
+                .map(([slug, color]) => ({ label: slug, color }))
+            legendItems.push({ label: '(no tenant)', color: '#9E9E9E' })
+            buildViewLegend(legendItems, 'Tenant')
+        }
+
+        async function applyMetricsCPU() {
+            let data = dataCache['metrics_cpu']
+            if (!data) {
+                try {
+                    const resp = await fetch(metricsUrl + '?type=cpu')
+                    data = await resp.json()
+                    dataCache['metrics_cpu'] = data
+                } catch (_) { data = { configured: false } }
+            }
+            if (!data.configured) {
+                buildViewLegend([{ label: 'InfluxDB not configured', color: '#9E9E9E' }], 'CPU Metrics')
+                applyOverlay(() => makeColor('#9E9E9E'))
+                return
+            }
+            if (data.error) {
+                buildViewLegend([{ label: 'Query error — check console', color: '#9E9E9E' }], 'CPU Metrics')
+                return
+            }
+            const metrics = data.metrics || {}
+            applyOverlay(node => {
+                if (!node.name) return undefined
+                // try full name, then short hostname
+                const entry = metrics[node.name] || metrics[node.name.split('.')[0]]
+                return makeColor(gradeColor(entry ? entry.cpu_pct : null))
+            })
+            buildViewLegend([
+                { label: '< 60%  — normal',   color: '#4CAF50' },
+                { label: '60–80% — elevated', color: '#FFC107' },
+                { label: '80–90% — high',     color: '#FF9800' },
+                { label: '> 90%  — critical', color: '#f44336' },
+                { label: 'No data',           color: '#9E9E9E' },
+            ], 'CPU Utilisation')
+        }
+
+        async function applyVulnerability() {
+            // First check if custom-field data was embedded directly in nodes
+            let hasEmbedded = false
+            for (const [, node] of nodes._data) {
+                if (node.vuln_score !== undefined || node.vuln_severity !== undefined) {
+                    hasEmbedded = true; break
+                }
+            }
+
+            let devData = {}
+            if (hasEmbedded) {
+                // Use the per-node data already sent from the backend
+                for (const [, node] of nodes._data) {
+                    if (node.name && (node.vuln_score !== undefined || node.vuln_severity !== undefined)) {
+                        devData[node.name] = { score: node.vuln_score, severity: node.vuln_severity }
+                    }
+                }
+            } else {
+                let data = dataCache['vulnerability']
+                if (!data) {
+                    try {
+                        const resp = await fetch(vulnUrl)
+                        data = await resp.json()
+                        dataCache['vulnerability'] = data
+                    } catch (_) { data = { configured: false } }
+                }
+                if (!data.configured) {
+                    buildViewLegend([{ label: 'Configure vuln_cf_score / vuln_cf_severity in PLUGINS_CONFIG', color: '#9E9E9E' }], 'Vulnerability')
+                    applyOverlay(() => makeColor('#9E9E9E'))
+                    return
+                }
+                if (data.error) {
+                    buildViewLegend([{ label: 'Query error', color: '#9E9E9E' }], 'Vulnerability')
+                    return
+                }
+                devData = data.devices || {}
+            }
+
+            applyOverlay(node => {
+                if (!node.name) return undefined
+                const entry = devData[node.name]
+                const sev = entry
+                    ? (entry.severity || scoreToSev(entry.score))
+                    : 'unknown'
+                return makeColor(VULN_COLORS[sev] || '#9E9E9E')
+            })
+            buildViewLegend([
+                { label: 'Critical  (CVSS ≥ 9.0)', color: '#B71C1C' },
+                { label: 'High      (CVSS 7–9)',    color: '#f44336' },
+                { label: 'Medium    (CVSS 4–7)',    color: '#FF9800' },
+                { label: 'Low       (CVSS < 4)',    color: '#FFC107' },
+                { label: 'None / clean',            color: '#4CAF50' },
+                { label: 'No data',                 color: '#9E9E9E' },
+            ], 'Vulnerability')
+        }
+
+        // --- Dispatch ---
+        const VIEW_LABELS = {
+            physical:      'Default',
+            device_status: 'Device Status',
+            platform:      'Platform / OS',
+            tenant:        'Tenant',
+            metrics_cpu:   'Metrics: CPU',
+            vulnerability: 'Vulnerability',
+        }
+
+        window.setViewType = async function setViewType(viewType) {
+            document.querySelectorAll('.view-type-btn').forEach(el =>
+                el.classList.toggle('active', el.dataset.view === viewType)
+            )
+            const btn = document.getElementById('btnViewType')
+            if (btn) btn.innerHTML = `<i class="mdi mdi-layers-outline"></i> View: ${VIEW_LABELS[viewType] || viewType}`
+
+            if      (viewType === 'physical')      applyPhysical()
+            else if (viewType === 'device_status') applyDeviceStatus()
+            else if (viewType === 'platform')      applyPlatform()
+            else if (viewType === 'tenant')        applyTenant()
+            else if (viewType === 'metrics_cpu')   await applyMetricsCPU()
+            else if (viewType === 'vulnerability') await applyVulnerability()
+        }
+
+        // Wire up dropdown
+        document.addEventListener('click', e => {
+            const btn = e.target.closest('.view-type-btn')
+            if (!btn) return
+            e.preventDefault()
+            window.setViewType(btn.dataset.view)
+        })
+
+        // Allow external cache invalidation (force re-fetch metrics/vuln data)
+        window.invalidateViewCache = function(viewType) {
+            if (viewType) delete dataCache[viewType]
+            else Object.keys(dataCache).forEach(k => delete dataCache[k])
+        }
+
+    })()
+
     function getGridPosition(nodeId, gridSize) {
         x = graph.getPosition(nodeId).x;
         y = graph.getPosition(nodeId).y;

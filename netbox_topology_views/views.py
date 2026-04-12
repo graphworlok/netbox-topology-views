@@ -249,6 +249,25 @@ def create_node(
         if device.role.color != "":
             node["color.border"] = "#" + device.role.color
 
+        # Metadata consumed by client-side view type overlays
+        node["device_status"] = str(device.status) if device.status else "unknown"
+        node["platform_slug"] = device.platform.slug if device.platform else ""
+        node["platform_name"] = device.platform.name if device.platform else ""
+        node["tenant_slug"]   = device.tenant.slug if device.tenant else ""
+        node["tenant_name"]   = device.tenant.name if device.tenant else ""
+
+        # Vulnerability score from custom field (if configured)
+        _vuln_cf_score = settings.PLUGINS_CONFIG["netbox_topology_views"].get("vuln_cf_score", "")
+        _vuln_cf_sev   = settings.PLUGINS_CONFIG["netbox_topology_views"].get("vuln_cf_severity", "")
+        cf = getattr(device, "custom_field_data", {}) or {}
+        if _vuln_cf_score and _vuln_cf_score in cf and cf[_vuln_cf_score] is not None:
+            try:
+                node["vuln_score"] = float(cf[_vuln_cf_score])
+            except (ValueError, TypeError):
+                pass
+        if _vuln_cf_sev and _vuln_cf_sev in cf and cf[_vuln_cf_sev] is not None:
+            node["vuln_severity"] = str(cf[_vuln_cf_sev]).lower()
+
     model_class = getattr(netbox_topology_views.models, model_name)
 
     if group_id is None or group_id == "default":
@@ -1176,6 +1195,148 @@ def get_topology_data(
     results["group"] = group_id
     results["options"] = options
     return results
+
+
+class MetricsView(PermissionRequiredMixin, View):
+    """
+    Returns per-device CPU utilisation % (and memory, if available) from
+    InfluxDB/Collectd.  Used by the Metrics CPU view type in the topology.
+    Query: GET /plugins/netbox_topology_views/metrics/?type=cpu
+    """
+    permission_required = ("dcim.view_device",)
+
+    def get(self, request):
+        from django.http import JsonResponse
+        influxdb_url = CONFIG.get("influxdb_url", "")
+        if not influxdb_url:
+            return JsonResponse({"configured": False})
+
+        influxdb_token    = CONFIG.get("influxdb_token", "")
+        influxdb_org      = CONFIG.get("influxdb_org", "")
+        influxdb_bucket   = CONFIG.get("influxdb_bucket", "")
+        influxdb_database = CONFIG.get("influxdb_database", "")
+        measurement       = CONFIG.get("influxdb_measurement", "cpu_value")
+        host_tag          = CONFIG.get("influxdb_host_tag", "host")
+        idle_instance     = CONFIG.get("influxdb_cpu_idle_instance", "idle")
+        stale_minutes     = int(CONFIG.get("influxdb_stale_minutes", 15))
+
+        try:
+            import requests as _req
+            metrics: dict = {}
+
+            if influxdb_token:
+                # InfluxDB 2.x — Flux
+                flux = (
+                    f'from(bucket: "{influxdb_bucket}")'
+                    f'  |> range(start: -{stale_minutes}m)'
+                    f'  |> filter(fn: (r) => r["_measurement"] == "{measurement}"'
+                    f'       and r["type_instance"] == "{idle_instance}")'
+                    f'  |> mean()'
+                    f'  |> keep(columns: ["{host_tag}", "_value"])'
+                )
+                resp = _req.post(
+                    f"{influxdb_url.rstrip('/')}/api/v2/query",
+                    params={"org": influxdb_org},
+                    headers={
+                        "Authorization": f"Token {influxdb_token}",
+                        "Content-Type": "application/vnd.flux",
+                        "Accept":        "application/csv",
+                    },
+                    data=flux,
+                    timeout=10,
+                )
+                resp.raise_for_status()
+
+                header = host_col = value_col = None
+                for line in resp.text.splitlines():
+                    if not line or line.startswith("#"):
+                        header = None
+                        continue
+                    parts = line.split(",")
+                    if header is None:
+                        header = parts
+                        try:
+                            host_col  = header.index(host_tag)
+                            value_col = header.index("_value")
+                        except ValueError:
+                            continue
+                        continue
+                    if host_col is not None and value_col is not None:
+                        h = parts[host_col].strip()  if host_col  < len(parts) else ""
+                        v = parts[value_col].strip() if value_col < len(parts) else ""
+                        if h and v:
+                            try:
+                                metrics[h] = {"cpu_pct": round(100 - float(v), 1)}
+                            except ValueError:
+                                pass
+            else:
+                # InfluxDB 1.x — InfluxQL
+                q = (
+                    f'SELECT mean(value) FROM "{measurement}" '
+                    f'WHERE time > now() - {stale_minutes}m '
+                    f'AND "type_instance" = \'{idle_instance}\' '
+                    f'GROUP BY "{host_tag}"'
+                )
+                resp = _req.get(
+                    f"{influxdb_url.rstrip('/')}/query",
+                    params={"db": influxdb_database, "q": q, "epoch": "s"},
+                    timeout=10,
+                )
+                resp.raise_for_status()
+                data = resp.json()
+                for result in data.get("results", []):
+                    for series in result.get("series", []):
+                        h    = series.get("tags", {}).get(host_tag, "")
+                        vals = series.get("values", [])
+                        if h and vals and vals[0][1] is not None:
+                            metrics[h] = {"cpu_pct": round(100 - float(vals[0][1]), 1)}
+
+            return JsonResponse({"configured": True, "metrics": metrics})
+
+        except Exception:
+            import traceback
+            traceback.print_exc()
+            return JsonResponse({"configured": True, "error": "Query failed", "metrics": {}})
+
+
+class VulnerabilityView(PermissionRequiredMixin, View):
+    """
+    Returns vulnerability data per device, read from NetBox custom fields.
+    Configure vuln_cf_score (CVSS 0-10 float) and/or vuln_cf_severity
+    (critical/high/medium/low/none string) in PLUGINS_CONFIG to enable.
+    Query: GET /plugins/netbox_topology_views/vulnerabilities/
+    """
+    permission_required = ("dcim.view_device",)
+
+    def get(self, request):
+        from django.http import JsonResponse
+        score_cf    = CONFIG.get("vuln_cf_score", "")
+        severity_cf = CONFIG.get("vuln_cf_severity", "")
+
+        if not score_cf and not severity_cf:
+            return JsonResponse({"configured": False})
+
+        try:
+            result: dict = {}
+            for dev in Device.objects.values("name", "custom_field_data"):
+                cf = dev.get("custom_field_data") or {}
+                entry: dict = {}
+                if score_cf and score_cf in cf and cf[score_cf] is not None:
+                    try:
+                        entry["score"] = float(cf[score_cf])
+                    except (ValueError, TypeError):
+                        pass
+                if severity_cf and severity_cf in cf and cf[severity_cf] is not None:
+                    entry["severity"] = str(cf[severity_cf]).lower()
+                if entry:
+                    result[dev["name"]] = entry
+
+            return JsonResponse({"configured": True, "devices": result})
+
+        except Exception:
+            import traceback
+            traceback.print_exc()
+            return JsonResponse({"configured": True, "error": "Query failed", "devices": {}})
 
 
 class AlertStatusView(PermissionRequiredMixin, View):
