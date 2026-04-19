@@ -1604,6 +1604,776 @@ CONFIG = settings.PLUGINS_CONFIG["netbox_topology_views"]
 ADDITIONAL_ROLES = (PowerPanel, PowerFeed, Circuit)
 
 
+# ---------------------------------------------------------------------------
+# IP / Routing Topology
+# ---------------------------------------------------------------------------
+
+_IP_PALETTE = [
+    '#2196F3', '#4CAF50', '#FF9800', '#9C27B0', '#F44336',
+    '#00BCD4', '#8BC34A', '#FF5722', '#3F51B5', '#E91E63',
+    '#009688', '#795548', '#607D8B', '#FF4081', '#1565C0',
+]
+
+import ipaddress as _ipaddr_module
+
+_PRIVATE_NETS = [
+    _ipaddr_module.ip_network('10.0.0.0/8'),
+    _ipaddr_module.ip_network('172.16.0.0/12'),
+    _ipaddr_module.ip_network('192.168.0.0/16'),
+    _ipaddr_module.ip_network('100.64.0.0/10'),
+    _ipaddr_module.ip_network('169.254.0.0/16'),
+    _ipaddr_module.ip_network('127.0.0.0/8'),
+    _ipaddr_module.ip_network('fc00::/7'),
+    _ipaddr_module.ip_network('fe80::/10'),
+    _ipaddr_module.ip_network('::1/128'),
+]
+
+
+def _is_private_net(net):
+    for priv in _PRIVATE_NETS:
+        try:
+            if net.version == priv.version and (net.subnet_of(priv) or net == priv):
+                return True
+        except Exception:
+            pass
+    return False
+
+
+def _hash_color(s):
+    h = 0
+    for c in str(s):
+        h = (31 * h + ord(c)) & 0xFFFFFFFF
+    return _IP_PALETTE[h % len(_IP_PALETTE)]
+
+
+def _spring_for_prefix(prefixlen, family):
+    """Shorter spring for more specific (smaller) subnets — devices cluster closer."""
+    max_plen = 32 if family == 4 else 128
+    return max(50, int(380 - (prefixlen / max_plen) * 320))
+
+
+_VULN_SEV_WEIGHTS = {'critical': 5, 'high': 4, 'medium': 3, 'low': 2, 'info': 1, 'none': 0}
+_VULN_SEV_COLORS  = {
+    'critical': '#D32F2F',
+    'high':     '#F57C00',
+    'medium':   '#F9A825',
+    'low':      '#1976D2',
+    'info':     '#9E9E9E',
+}
+
+
+def get_ip_topology_data(request):
+    """Build topology nodes/edges from IP assignments, prefixes, ASNs, and L2 VLANs.
+
+    Physics design:
+    - "The Internet" node is pinned at the origin.
+    - Public prefix nodes spring toward Internet / their ASN node.
+    - LAN (private) prefix nodes have no Internet spring, so physics repels them
+      outward — sites naturally cluster together and push apart from each other.
+    """
+    from ipam.models import IPAddress, Prefix, VRF
+
+    vrf_id            = request.GET.get('vrf_id')  or None
+    site_id           = request.GET.get('site_id') or None
+    show_hosts        = request.GET.get('show_hosts', '')         == 'on'
+    show_prefix_edges = request.GET.get('show_prefix_edges', '')  == 'on'
+    show_internet     = request.GET.get('show_internet', 'on')    == 'on'
+    show_asns         = request.GET.get('show_asns', 'on')        == 'on'
+    show_l2           = request.GET.get('show_l2', '')            == 'on'
+    show_vulns        = request.GET.get('show_vulns', 'on')       == 'on'
+    show_mac_adj      = request.GET.get('show_mac_adj', '')       == 'on'
+    geo_seed          = request.GET.get('geo_seed', '')           == 'on'
+
+    # --- Prefixes ---
+    prefix_qs = Prefix.objects.select_related('vrf', 'site', 'role', 'tenant').order_by('prefix')
+    if vrf_id:
+        prefix_qs = prefix_qs.filter(vrf_id=vrf_id)
+    if site_id:
+        prefix_qs = prefix_qs.filter(site_id=site_id)
+
+    prefixes = list(prefix_qs)
+    if not show_hosts:
+        prefixes = [p for p in prefixes if not (
+            (p.family == 4 and p.prefix.prefixlen >= 32) or
+            (p.family == 6 and p.prefix.prefixlen >= 128)
+        )]
+
+    nodes     = []
+    edges     = []
+    edge_id   = 0
+    prefix_node_ids  = {}
+    prefix_is_public = {}
+
+    # Build prefix-net list first for public/private classification
+    prefix_nets = []
+    for p in prefixes:
+        try:
+            net = _ipaddr_module.ip_network(str(p.prefix), strict=False)
+            prefix_nets.append((p.pk, net, p.vrf_id, p.family))
+            prefix_is_public[p.pk] = not _is_private_net(net)
+        except Exception:
+            prefix_is_public[p.pk] = False
+
+    has_public_prefixes = any(prefix_is_public.values())
+
+    # ── ASN nodes ────────────────────────────────────────────────────────────
+    asn_node_ids = {}
+    site_asns    = {}
+    if show_asns:
+        try:
+            from ipam.models import ASN as NetBoxASN
+            for asn_obj in NetBoxASN.objects.prefetch_related('sites').all():
+                asn_nid = f"asn_{asn_obj.pk}"
+                label   = f"AS{asn_obj.asn}"
+                if asn_obj.description:
+                    label += f"\n{asn_obj.description[:30]}"
+                nodes.append({
+                    "id":      asn_nid,
+                    "label":   label,
+                    "shape":   "box",
+                    "size":    22,
+                    "color": {
+                        "border":     "#FF9800",
+                        "background": "#FFF3E0",
+                        "highlight":  {"border": "#E65100", "background": "#FFE0B2"},
+                    },
+                    "font":    {"size": 11},
+                    "href":    asn_obj.get_absolute_url(),
+                    "title":   f"<b>AS{asn_obj.asn}</b><br>{asn_obj.description or ''}",
+                    "physics": True,
+                    "x": 0, "y": 0,
+                    "is_asn":  True,
+                    "asn_num": str(asn_obj.asn),
+                })
+                asn_node_ids[asn_obj.pk] = asn_nid
+                for site in asn_obj.sites.all():
+                    site_asns.setdefault(site.pk, []).append(asn_obj.pk)
+        except (ImportError, Exception):
+            pass
+
+    # ── Internet node (pinned at origin) ─────────────────────────────────────
+    internet_id = "internet"
+    if show_internet and (has_public_prefixes or asn_node_ids):
+        nodes.insert(0, {
+            "id":      internet_id,
+            "label":   "The\nInternet",
+            "shape":   "ellipse",
+            "size":    55,
+            "color": {
+                "border":     "#1565C0",
+                "background": "#E3F2FD",
+                "highlight":  {"border": "#0D47A1", "background": "#BBDEFB"},
+            },
+            "font":    {"size": 14, "bold": True, "color": "#1565C0"},
+            "physics": False,
+            "x": 0, "y": 0,
+            "fixed":   {"x": True, "y": True},
+            "title":   "<b>The Internet</b><br>Public IP space",
+            "is_internet": True,
+        })
+        # ASN → Internet edges
+        for asn_pk, asn_nid in asn_node_ids.items():
+            edge_id += 1
+            edges.append({
+                "id":     edge_id,
+                "from":   asn_nid,
+                "to":     internet_id,
+                "length": 200,
+                "color":  {"color": "#FF9800", "opacity": 0.7},
+                "width":  2,
+                "dashes": [6, 3],
+                "smooth": {"type": "dynamic"},
+                "title":  "Upstream to Internet",
+                "is_wan": True,
+            })
+
+    # ── Prefix nodes ──────────────────────────────────────────────────────────
+    for p in prefixes:
+        node_id  = f"pfx_{p.pk}"
+        prefix_node_ids[p.pk] = node_id
+        is_pub   = prefix_is_public.get(p.pk, False)
+
+        vrf_key  = str(p.vrf_id) if p.vrf_id else "global"
+        vrf_name = p.vrf.name if p.vrf else "Global"
+        color    = "#1565C0" if is_pub else _hash_color(vrf_key)
+
+        plen     = p.prefix.prefixlen
+        family   = p.family
+        max_plen = 32 if family == 4 else 128
+        node_size = max(18, int(60 - (plen / max_plen) * 42))
+
+        label_lines = [str(p.prefix)]
+        if p.description:
+            label_lines.append(p.description[:35])
+        if p.vrf:
+            label_lines.append(f"VRF: {vrf_name}")
+        if is_pub:
+            label_lines.append("WAN / Public")
+
+        nodes.append({
+            "id":        node_id,
+            "label":     "\n".join(label_lines),
+            "shape":     "ellipse",
+            "size":      node_size,
+            "color": {
+                "border":     color,
+                "background": color + "33",
+                "highlight":  {"border": color, "background": color + "66"},
+            },
+            "font":       {"size": 11},
+            "href":       p.get_absolute_url(),
+            "title":      (
+                f"<b>{p.prefix}</b><br>"
+                f"Type: {'Public / WAN' if is_pub else 'Private / LAN'}<br>"
+                f"VRF: {vrf_name}<br>"
+                f"Status: {p.status}<br>"
+                f"Description: {p.description or '—'}<br>"
+                f"Site: {p.site or '—'}"
+            ),
+            "physics":    True,
+            "x": 0, "y": 0,
+            "vrf_key":    vrf_key,
+            "vrf_name":   vrf_name,
+            "prefix_len": plen,
+            "family":     family,
+            "site_id":    p.site_id,
+            "is_prefix":  True,
+            "is_public":  is_pub,
+        })
+
+        # Public prefix → ASN or directly → Internet
+        if show_internet and is_pub and (has_public_prefixes or asn_node_ids):
+            target_id    = internet_id
+            edge_color   = "#1565C0"
+            if show_asns and p.site_id and p.site_id in site_asns:
+                asn_pk     = site_asns[p.site_id][0]
+                target_id  = asn_node_ids[asn_pk]
+                edge_color = "#FF9800"
+            edge_id += 1
+            edges.append({
+                "id":     edge_id,
+                "from":   node_id,
+                "to":     target_id,
+                "length": _spring_for_prefix(plen, family) + 100,
+                "color":  {"color": edge_color, "opacity": 0.55},
+                "width":  2,
+                "smooth": {"type": "dynamic"},
+                "title":  f"{p.prefix} → Internet",
+                "is_wan": True,
+            })
+
+    # ── IPs on device interfaces ───────────────────────────────────────────────
+    interface_ct = ContentType.objects.get_for_model(Interface)
+    ip_qs = (
+        IPAddress.objects
+        .filter(assigned_object_type=interface_ct, assigned_object_id__isnull=False)
+        .select_related('vrf')
+    )
+    if vrf_id:
+        ip_qs = ip_qs.filter(vrf_id=vrf_id)
+
+    iface_ids = list(ip_qs.values_list('assigned_object_id', flat=True).distinct())
+    ifaces_by_id = {
+        iface.pk: iface
+        for iface in Interface.objects.select_related(
+            'device__role', 'device__site', 'device__device_type'
+        ).filter(pk__in=iface_ids)
+    }
+
+    device_node_ids = {}
+    connected_edges  = set()
+
+    def _best_prefix(ip_addr_obj, vrf_id_val):
+        best_pk = None; best_plen = -1
+        for pfx_pk, pfx_net, pfx_vrf_id, _ in prefix_nets:
+            if pfx_vrf_id != vrf_id_val:
+                continue
+            try:
+                if ip_addr_obj in pfx_net and pfx_net.prefixlen > best_plen:
+                    best_plen = pfx_net.prefixlen; best_pk = pfx_pk
+            except Exception:
+                continue
+        return best_pk, best_plen
+
+    for ip in ip_qs:
+        iface = ifaces_by_id.get(ip.assigned_object_id)
+        if iface is None or iface.device is None:
+            continue
+        device = iface.device
+        try:
+            ip_addr = _ipaddr_module.ip_address(str(ip.address.ip))
+        except Exception:
+            continue
+
+        best_pk, best_plen = _best_prefix(ip_addr, ip.vrf_id)
+        pfx_node_id = prefix_node_ids.get(best_pk) if best_pk else None
+
+        dev_pk = device.pk
+        if dev_pk not in device_node_ids:
+            dev_id     = f"dev_{dev_pk}"
+            dev_image  = find_image_url(device.role.slug if device.role else "role-unknown")
+            role_color = "#" + (device.role.color if device.role and device.role.color else "6c757d")
+            nodes.append({
+                "id":            dev_id,
+                "label":         device.name or f"Device {dev_pk}",
+                "name":          device.name,
+                "shape":         "image",
+                "image":         dev_image,
+                "size":          25,
+                "href":          device.get_absolute_url(),
+                "title":         (
+                    f"<b>{device.name}</b><br>"
+                    f"Site: {device.site}<br>"
+                    f"Role: {device.role}<br>"
+                    f"Status: {device.status}"
+                ),
+                "physics":       True,
+                "x": 0, "y": 0,
+                "color":         {"border": role_color},
+                "device_status": device.status,
+                "site_id":       device.site_id,
+                "is_device":     True,
+            })
+            device_node_ids[dev_pk] = dev_id
+
+        dev_node_id = device_node_ids[dev_pk]
+        if pfx_node_id is None:
+            continue
+
+        edge_key = (dev_node_id, pfx_node_id)
+        if edge_key not in connected_edges:
+            connected_edges.add(edge_key)
+            edge_id += 1
+            is_pub = prefix_is_public.get(best_pk, False)
+            edges.append({
+                "id":     edge_id,
+                "from":   dev_node_id,
+                "to":     pfx_node_id,
+                "length": _spring_for_prefix(best_plen, ip_addr.version),
+                "color":  {"color": "#1565C0" if is_pub else "#999999", "opacity": 0.55},
+                "width":  1,
+                "smooth": {"type": "dynamic"},
+                "title":  str(ip.address),
+                "label":  str(ip.address),
+                "font":   {"size": 9, "color": "#777"},
+                "is_wan": is_pub,
+            })
+
+    # ── IPs on VM interfaces ───────────────────────────────────────────────────
+    vm_node_ids = {}
+    try:
+        from virtualization.models import VMInterface
+        vm_iface_ct = ContentType.objects.get_for_model(VMInterface)
+        vm_ip_qs = (
+            IPAddress.objects
+            .filter(assigned_object_type=vm_iface_ct, assigned_object_id__isnull=False)
+            .select_related('vrf')
+        )
+        if vrf_id:
+            vm_ip_qs = vm_ip_qs.filter(vrf_id=vrf_id)
+
+        vm_iface_ids = list(vm_ip_qs.values_list('assigned_object_id', flat=True).distinct())
+        vm_ifaces_by_id = {
+            vi.pk: vi
+            for vi in VMInterface.objects.select_related(
+                'virtual_machine__role', 'virtual_machine__site'
+            ).filter(pk__in=vm_iface_ids)
+        }
+
+        for ip in vm_ip_qs:
+            vi = vm_ifaces_by_id.get(ip.assigned_object_id)
+            if vi is None or vi.virtual_machine is None:
+                continue
+            vm = vi.virtual_machine
+            try:
+                ip_addr = _ipaddr_module.ip_address(str(ip.address.ip))
+            except Exception:
+                continue
+
+            best_pk, best_plen = _best_prefix(ip_addr, ip.vrf_id)
+            pfx_node_id = prefix_node_ids.get(best_pk) if best_pk else None
+
+            vm_pk = vm.pk
+            if vm_pk not in vm_node_ids:
+                vm_id    = f"vmip_{vm_pk}"
+                vm_image = find_image_url(vm.role.slug if vm.role else "virtual-machine")
+                nodes.append({
+                    "id":      vm_id,
+                    "label":   vm.name,
+                    "name":    vm.name,
+                    "shape":   "image",
+                    "image":   vm_image,
+                    "size":    20,
+                    "href":    vm.get_absolute_url(),
+                    "title":   f"<b>{vm.name}</b><br>Virtual Machine",
+                    "physics": True,
+                    "x": 0, "y": 0,
+                    "color":   {"border": "#4CAF50"},
+                    "site_id": vm.site_id,
+                    "is_vm":   True,
+                })
+                vm_node_ids[vm_pk] = vm_id
+
+            vm_node_id = vm_node_ids[vm_pk]
+            if pfx_node_id is None:
+                continue
+
+            edge_key = (vm_node_id, pfx_node_id)
+            if edge_key not in connected_edges:
+                connected_edges.add(edge_key)
+                edge_id += 1
+                edges.append({
+                    "id":     edge_id,
+                    "from":   vm_node_id,
+                    "to":     pfx_node_id,
+                    "length": _spring_for_prefix(best_plen, ip_addr.version),
+                    "color":  {"color": "#4CAF50", "opacity": 0.5},
+                    "width":  1,
+                    "smooth": {"type": "dynamic"},
+                    "title":  str(ip.address),
+                    "label":  str(ip.address),
+                    "font":   {"size": 9, "color": "#777"},
+                })
+    except Exception:
+        pass
+
+    # ── Vulnerability flags ───────────────────────────────────────────────────
+    if show_vulns and (device_node_ids or vm_node_ids):
+        try:
+            from netbox_vuln_manager.models import VulnerabilityFinding
+            from netbox_vuln_manager.choices import FindingStatusChoices
+            from dcim.models import Device as _DcimDevice
+            from virtualization.models import VirtualMachine as _VM
+
+            dev_ct = ContentType.objects.get_for_model(_DcimDevice)
+            vm_ct  = ContentType.objects.get_for_model(_VM)
+            active_statuses = [FindingStatusChoices.OPEN, FindingStatusChoices.IN_PROGRESS]
+
+            findings_qs = (
+                VulnerabilityFinding.objects
+                .filter(status__in=active_statuses)
+                .filter(
+                    Q(asset_type=dev_ct, asset_id__in=list(device_node_ids.keys())) |
+                    Q(asset_type=vm_ct,  asset_id__in=list(vm_node_ids.keys()))
+                )
+                .values('asset_type_id', 'asset_id', 'severity', 'vulnerability__name')
+            )
+
+            asset_findings = {}
+            for f in findings_qs:
+                key = (f['asset_type_id'], f['asset_id'])
+                asset_findings.setdefault(key, []).append(
+                    (f['severity'], f['vulnerability__name'] or '')
+                )
+
+            if asset_findings:
+                node_by_id = {n['id']: n for n in nodes}
+
+                def _apply_vuln(node, findings_list):
+                    worst_sev = max(findings_list, key=lambda x: _VULN_SEV_WEIGHTS.get(x[0], 0))[0]
+                    count     = len(findings_list)
+                    sev_color = _VULN_SEV_COLORS.get(worst_sev, '#9E9E9E')
+                    node['vuln_severity'] = worst_sev
+                    node['vuln_count']    = count
+                    node['color']['border'] = sev_color
+                    node['borderWidth']     = 4
+                    sample    = [f[1] for f in findings_list[:5] if f[1]]
+                    vuln_html = ''.join(f'<br>&#8226; {v}' for v in sample)
+                    if count > 5:
+                        vuln_html += f'<br>&#8226; &hellip; and {count - 5} more'
+                    node['title'] += (
+                        "<br><hr style='margin:4px 0'>"
+                        f"<b style='color:{sev_color}'>&#9888; {count} open "
+                        f"vuln{'s' if count != 1 else ''} ({worst_sev.upper()})</b>"
+                        + vuln_html
+                    )
+
+                for dev_pk, dev_nid in device_node_ids.items():
+                    key = (dev_ct.pk, dev_pk)
+                    if key in asset_findings:
+                        node = node_by_id.get(dev_nid)
+                        if node:
+                            _apply_vuln(node, asset_findings[key])
+
+                for vm_pk, vm_nid in vm_node_ids.items():
+                    key = (vm_ct.pk, vm_pk)
+                    if key in asset_findings:
+                        node = node_by_id.get(vm_nid)
+                        if node:
+                            _apply_vuln(node, asset_findings[key])
+        except Exception:
+            pass
+
+    # ── Layer 2: VLANs ───────────────────────────────────────────────────────
+    vlan_node_ids = {}
+    if show_l2:
+        try:
+            from ipam.models import VLAN
+            vlan_qs = VLAN.objects.select_related('site', 'group', 'role')
+            if site_id:
+                vlan_qs = vlan_qs.filter(site_id=site_id)
+            for vlan in vlan_qs:
+                vlan_nid = f"vlan_{vlan.pk}"
+                vlan_node_ids[vlan.pk] = vlan_nid
+                site_key = str(vlan.site_id) if vlan.site_id else "nosite"
+                color    = _hash_color(f"vlan_{site_key}")
+                nodes.append({
+                    "id":      vlan_nid,
+                    "label":   f"VLAN {vlan.vid}\n{vlan.name or ''}",
+                    "shape":   "diamond",
+                    "size":    20,
+                    "color": {
+                        "border":     color,
+                        "background": color + "44",
+                        "highlight":  {"border": color, "background": color + "88"},
+                    },
+                    "font":    {"size": 10},
+                    "href":    vlan.get_absolute_url(),
+                    "title":   (
+                        f"<b>VLAN {vlan.vid}</b><br>"
+                        f"Name: {vlan.name or '—'}<br>"
+                        f"Site: {vlan.site or '—'}<br>"
+                        f"Status: {vlan.status}"
+                    ),
+                    "physics": True,
+                    "x": 0, "y": 0,
+                    "site_id": vlan.site_id,
+                    "is_vlan": True,
+                })
+            # Device interface → VLAN memberships
+            if device_node_ids:
+                l2_ifaces = (
+                    Interface.objects
+                    .select_related('device')
+                    .filter(device_id__in=list(device_node_ids.keys()))
+                    .prefetch_related('tagged_vlans', 'untagged_vlan')
+                )
+                for iface in l2_ifaces:
+                    dev_nid = device_node_ids.get(iface.device_id)
+                    if not dev_nid:
+                        continue
+                    vlans_to_connect = list(iface.tagged_vlans.filter(pk__in=list(vlan_node_ids.keys())))
+                    if iface.untagged_vlan and iface.untagged_vlan.pk in vlan_node_ids:
+                        vlans_to_connect.append(iface.untagged_vlan)
+                    for vlan in vlans_to_connect:
+                        edge_key = (dev_nid, vlan_node_ids[vlan.pk])
+                        if edge_key not in connected_edges:
+                            connected_edges.add(edge_key)
+                            edge_id += 1
+                            vl_color = _hash_color(f"vlan_{vlan.site_id or 'nosite'}")
+                            edges.append({
+                                "id":     edge_id,
+                                "from":   dev_nid,
+                                "to":     vlan_node_ids[vlan.pk],
+                                "length": 80,
+                                "color":  {"color": vl_color, "opacity": 0.45},
+                                "width":  1,
+                                "dashes": [3, 4],
+                                "smooth": {"type": "dynamic"},
+                                "title":  f"VLAN {vlan.vid}: {iface.name}",
+                                "is_l2":  True,
+                            })
+        except Exception:
+            pass
+
+    # ── Prefix → parent prefix routing edges ──────────────────────────────────
+    if show_prefix_edges and len(prefix_nets) > 1:
+        for i, (pk_a, net_a, vrf_a, fam_a) in enumerate(prefix_nets):
+            best_parent = None
+            best_plen   = -1
+            for j, (pk_b, net_b, vrf_b, fam_b) in enumerate(prefix_nets):
+                if i == j or vrf_a != vrf_b or fam_a != fam_b:
+                    continue
+                try:
+                    if net_b.prefixlen < net_a.prefixlen and net_a.subnet_of(net_b):
+                        if net_b.prefixlen > best_plen:
+                            best_plen   = net_b.prefixlen
+                            best_parent = pk_b
+                except Exception:
+                    continue
+            if best_parent is not None:
+                edge_id += 1
+                edges.append({
+                    "id":     edge_id,
+                    "from":   prefix_node_ids[pk_a],
+                    "to":     prefix_node_ids[best_parent],
+                    "color":  {"color": "#cccccc", "opacity": 0.35},
+                    "width":  1,
+                    "dashes": [6, 4],
+                    "smooth": {"type": "dynamic"},
+                    "title":  "Parent prefix",
+                    "length": _spring_for_prefix(best_plen, fam_a),
+                })
+
+    # ── Geographic coordinates ────────────────────────────────────────────────
+    # Collect site lat/lon and attach to nodes; optionally seed initial positions.
+    site_geo = {}
+    try:
+        from dcim.models import Site as _Site
+        for s in _Site.objects.filter(latitude__isnull=False, longitude__isnull=False):
+            site_geo[s.pk] = (float(s.latitude), float(s.longitude))
+    except Exception:
+        pass
+
+    if site_geo:
+        _all_lats = [v[0] for v in site_geo.values()]
+        _all_lons = [v[1] for v in site_geo.values()]
+        _lat_min  = min(_all_lats)
+        _lon_min  = min(_all_lons)
+        _lat_span = max(max(_all_lats) - _lat_min, 5.0)
+        _lon_span = max(max(_all_lons) - _lon_min, 5.0)
+        _CSPAN    = 2400
+
+        def _geo_canvas(lat, lon):
+            cx = int((lon - _lon_min) / _lon_span * _CSPAN - _CSPAN / 2)
+            cy = int(-((lat - _lat_min) / _lat_span * _CSPAN - _CSPAN / 2))
+            return cx, cy
+
+        for node in nodes:
+            sid = node.get('site_id')
+            if sid and sid in site_geo:
+                lat, lon = site_geo[sid]
+                node['geo_lat'] = lat
+                node['geo_lon'] = lon
+                if geo_seed:
+                    node['x'], node['y'] = _geo_canvas(lat, lon)
+
+    # ── MAC adjacency (SNMP learned forwarding table) ─────────────────────────
+    if show_mac_adj and device_node_ids:
+        try:
+            from netbox_snmp_sync.models import LearnedMAC
+            from netbox_snmp_sync.choices import LearnedMACStatusChoices
+            from dcim.models import Device as _DcimDevice, Interface as _DcimIface
+
+            # Map device primary IP → device_pk
+            dev_ip_map = {}
+            for dev in _DcimDevice.objects.filter(
+                pk__in=device_node_ids.keys()
+            ).select_related('primary_ip4', 'primary_ip6'):
+                if dev.primary_ip4:
+                    dev_ip_map[str(dev.primary_ip4.address.ip)] = dev.pk
+                if dev.primary_ip6:
+                    dev_ip_map[str(dev.primary_ip6.address.ip)] = dev.pk
+
+            if dev_ip_map:
+                # Map Interface MAC → device_pk for devices in the graph
+                mac_dev_map = {}
+                for row in _DcimIface.objects.filter(
+                    device_id__in=device_node_ids.keys(),
+                    mac_address__isnull=False,
+                ).exclude(mac_address='').values('device_id', 'mac_address'):
+                    mac_dev_map[str(row['mac_address']).upper()] = row['device_id']
+
+                active_statuses = [
+                    LearnedMACStatusChoices.NEW,
+                    LearnedMACStatusChoices.ACTIVE,
+                    LearnedMACStatusChoices.PROMOTED,
+                ]
+                mac_adj_seen = set()
+                for mac_entry in LearnedMAC.objects.filter(
+                    source_device_ip__in=list(dev_ip_map.keys()),
+                    status__in=active_statuses,
+                    entry_type='learned',
+                ).values('mac_address', 'source_device_ip', 'source_interface', 'last_seen'):
+                    src_pk  = dev_ip_map.get(mac_entry['source_device_ip'])
+                    if src_pk is None:
+                        continue
+                    tgt_pk  = mac_dev_map.get(str(mac_entry['mac_address']).upper())
+                    if tgt_pk is None or tgt_pk == src_pk:
+                        continue
+                    src_nid = device_node_ids[src_pk]
+                    tgt_nid = device_node_ids[tgt_pk]
+                    key     = tuple(sorted([src_nid, tgt_nid]))
+                    if key in mac_adj_seen:
+                        continue
+                    mac_adj_seen.add(key)
+                    edge_id += 1
+                    ts = mac_entry['last_seen']
+                    edges.append({
+                        "id":         edge_id,
+                        "from":       src_nid,
+                        "to":         tgt_nid,
+                        "length":     60,
+                        "color":      {"color": "#00897B", "opacity": 0.65},
+                        "width":      2,
+                        "dashes":     [4, 3],
+                        "smooth":     {"type": "dynamic"},
+                        "title":      (
+                            f"<b>MAC adjacency</b><br>"
+                            f"MAC: {mac_entry['mac_address']}<br>"
+                            f"Port: {mac_entry['source_interface'] or '—'}<br>"
+                            f"Last seen: {ts.strftime('%Y-%m-%d %H:%M') if ts else '—'}"
+                        ),
+                        "is_mac_adj": True,
+                    })
+        except Exception:
+            pass
+
+    # ── VRF legend metadata ─────────────────────────────────────────────────
+    vrfs_seen = {}
+    for p in prefixes:
+        vk = str(p.vrf_id) if p.vrf_id else "global"
+        if vk not in vrfs_seen:
+            vrfs_seen[vk] = {"name": p.vrf.name if p.vrf else "Global", "color": _hash_color(vk)}
+
+    return {
+        "nodes":   nodes,
+        "edges":   edges,
+        "vrfs":    list(vrfs_seen.values()),
+        "options": {
+            "show_hosts":         show_hosts,
+            "show_prefix_edges":  show_prefix_edges,
+            "show_internet":      show_internet,
+            "show_asns":          show_asns,
+            "show_l2":            show_l2,
+            "show_vulns":         show_vulns,
+            "show_mac_adj":       show_mac_adj,
+            "geo_seed":           geo_seed,
+            "vrf_id":             vrf_id,
+            "site_id":            site_id,
+        },
+    }
+
+
+class IPTopologyView(PermissionRequiredMixin, View):
+    """Physics-based topology derived from IP address assignments and prefix membership."""
+
+    permission_required = ("dcim.view_device", "ipam.view_prefix", "ipam.view_ipaddress")
+
+    def get(self, request):
+        from ipam.models import VRF, Prefix
+        from dcim.models import Site
+
+        topo_data = None
+        if request.GET:
+            try:
+                topo_data = get_ip_topology_data(request)
+            except Exception:
+                import traceback
+                traceback.print_exc()
+
+        vrfs   = VRF.objects.all().order_by('name')
+        sites  = Site.objects.all().order_by('name')
+
+        return render(request, "netbox_topology_views/ip_topology.html", {
+            "topology_data":      json.dumps(topo_data),
+            "broken_image":       find_image_url("role-unknown"),
+            "basepath":           settings.BASE_PATH,
+            "vrfs":               vrfs,
+            "sites":              sites,
+            "selected_vrf":       request.GET.get('vrf_id', ''),
+            "selected_site":      request.GET.get('site_id', ''),
+            "show_hosts":         request.GET.get('show_hosts', ''),
+            "show_prefix_edges":  request.GET.get('show_prefix_edges', ''),
+            "show_internet":      request.GET.get('show_internet', 'on'),
+            "show_asns":          request.GET.get('show_asns', 'on'),
+            "show_l2":            request.GET.get('show_l2', ''),
+            "show_vulns":         request.GET.get('show_vulns', 'on'),
+            "show_mac_adj":       request.GET.get('show_mac_adj', ''),
+            "geo_seed":           request.GET.get('geo_seed', ''),
+        })
+
+
 class TopologyImagesView(PermissionRequiredMixin, View):
     permission_required = (
         "dcim.view_site",

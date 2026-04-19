@@ -244,11 +244,10 @@ const coordSaveCheckbox = document.querySelector('#id_save_coords')
         // Status badge element in top-right of graph
         const statusBadge = document.createElement('div')
         statusBadge.id = 'alert-status-badge'
-        statusBadge.style.cssText = (
-            'position:absolute;top:12px;right:12px;z-index:20;padding:4px 10px;'
-            'border-radius:4px;font-size:12px;font-weight:600;pointer-events:none;'
+        statusBadge.style.cssText =
+            'position:absolute;top:12px;right:12px;z-index:20;padding:4px 10px;' +
+            'border-radius:4px;font-size:12px;font-weight:600;pointer-events:none;' +
             'background:#6c757d;color:#fff;'
-        )
         statusBadge.textContent = 'Status: loading…'
         container.style.position = 'relative'
         container.appendChild(statusBadge)
@@ -990,14 +989,16 @@ const coordSaveCheckbox = document.querySelector('#id_save_coords')
 
     // Default parameters – populated once; the settings panel updates them.
     window.physicsSettings = window.physicsSettings || {
-        solver:          'forceAtlas2Based',
-        springLength:    150,
-        springConstant:  0.05,
-        damping:         0.09,
-        levelSeparation: 150,
-        nodeSpacing:     120,
-        sortMethod:      'hubsize',
-        groupMargin:     60,
+        solver:                'forceAtlas2Based',
+        springLength:          150,
+        springConstant:        0.05,
+        damping:               0.09,
+        gravitationalConstant: -800,
+        centralGravity:        0.01,
+        levelSeparation:       150,
+        nodeSpacing:           120,
+        sortMethod:            'hubsize',
+        groupMargin:           60,
     }
 
     // Re-enable physics on every node so the active solver can move them.
@@ -1015,22 +1016,27 @@ const coordSaveCheckbox = document.querySelector('#id_save_coords')
         }
         if (solver === 'forceAtlas2Based') {
             base.forceAtlas2Based = {
-                springLength:   s.springLength,
-                springConstant: s.springConstant,
-                damping:        s.damping,
+                gravitationalConstant: s.gravitationalConstant,
+                centralGravity:        s.centralGravity,
+                springLength:          s.springLength,
+                springConstant:        s.springConstant,
+                damping:               s.damping,
             }
         } else if (solver === 'barnesHut') {
             base.barnesHut = {
-                springLength:   s.springLength,
-                springConstant: s.springConstant,
-                damping:        s.damping,
+                gravitationalConstant: s.gravitationalConstant,
+                centralGravity:        s.centralGravity,
+                springLength:          s.springLength,
+                springConstant:        s.springConstant,
+                damping:               s.damping,
             }
         } else if (solver === 'repulsion') {
             base.repulsion = {
-                nodeDistance:   s.springLength,
-                springLength:   s.springLength,
-                springConstant: s.springConstant,
-                damping:        s.damping,
+                centralGravity:  s.centralGravity,
+                nodeDistance:    Math.abs(s.gravitationalConstant) / 10,
+                springLength:    s.springLength,
+                springConstant:  s.springConstant,
+                damping:         s.damping,
             }
         } else if (solver === 'hierarchicalRepulsion') {
             base.hierarchicalRepulsion = {
@@ -1041,6 +1047,20 @@ const coordSaveCheckbox = document.querySelector('#id_save_coords')
             }
         }
         return base
+    }
+
+    // Run stabilization then stop physics — useful after complex rearrangements.
+    window.stabilizeNow = function stabilizeNow() {
+        const btn = document.getElementById('btnStabilizeNow')
+        if (btn) { btn.disabled = true; btn.innerHTML = '<i class="mdi mdi-loading mdi-spin"></i> Stabilizing…' }
+        const s = window.physicsSettings
+        graph.setOptions({ physics: { ...buildPhysicsOptions(s.solver), stabilization: { enabled: true, iterations: 500 } } })
+        graph.stabilize(500)
+        graph.once('stabilizationIterationsDone', () => {
+            graph.setOptions({ physics: { stabilization: { enabled: false } } })
+            graph.fit({ animation: { duration: 500, easingFunction: 'easeInOutQuad' } })
+            if (btn) { btn.disabled = false; btn.innerHTML = '<i class="mdi mdi-play"></i> Stabilize' }
+        })
     }
 
     // Apply one of the force-directed solvers and let physics run freely.

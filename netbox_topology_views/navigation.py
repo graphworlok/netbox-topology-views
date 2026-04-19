@@ -79,9 +79,10 @@ menu = PluginMenu(
     label='Topology Views',
     icon_class="mdi mdi-sitemap",
     groups=(
-        ('TOPOLOGY', 
+        ('TOPOLOGY',
             (
                 PluginMenuItem(link="plugins:netbox_topology_views:home", link_text="Topology", permissions=["dcim.view_site", "dcim.view_device"]),
+                PluginMenuItem(link="plugins:netbox_topology_views:ip_topology", link_text="IP / Routing Topology", permissions=["dcim.view_device", "ipam.view_prefix", "ipam.view_ipaddress"]),
             ),
         ),
         ('COORDINATES', 

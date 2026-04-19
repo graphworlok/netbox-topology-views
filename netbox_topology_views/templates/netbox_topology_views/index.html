@@ -344,6 +344,16 @@
           <div class="section-label">Force-directed</div>
 
           <div class="param-row">
+            <label for="ps-gravConst">Gravitational constant <small class="text-muted">(repulsion)</small></label>
+            <input type="range" id="ps-gravConst" min="-5000" max="-10" step="10" value="-800">
+            <span class="param-value" id="ps-gravConst-val">-800</span>
+          </div>
+          <div class="param-row">
+            <label for="ps-centralGrav">Central gravity</label>
+            <input type="range" id="ps-centralGrav" min="0" max="100" step="1" value="1">
+            <span class="param-value" id="ps-centralGrav-val">0.01</span>
+          </div>
+          <div class="param-row">
             <label for="ps-springLen">Spring length (edge rest length)</label>
             <input type="range" id="ps-springLen" min="30" max="500" step="10" value="150">
             <span class="param-value" id="ps-springLen-val">150</span>
@@ -357,6 +367,19 @@
             <label for="ps-damping">Damping</label>
             <input type="range" id="ps-damping" min="1" max="100" step="1" value="9">
             <span class="param-value" id="ps-damping-val">0.09</span>
+          </div>
+
+          <div class="mt-2 d-flex gap-2">
+            <button id="btnStabilizeNow" class="btn btn-sm btn-primary flex-fill"
+                    onclick="if(typeof window.stabilizeNow==='function')window.stabilizeNow()">
+              <i class="mdi mdi-play"></i> Stabilize
+            </button>
+          </div>
+          <div class="mt-1">
+            <div class="form-check form-switch">
+              <input class="form-check-input" type="checkbox" id="ps-physics-toggle" checked>
+              <label class="form-check-label" for="ps-physics-toggle" style="font-size:12px">Live physics</label>
+            </div>
           </div>
 
         </div>
@@ -409,16 +432,22 @@
         });
       }
 
-      bindRange('ps-groupMargin', 'ps-groupMargin-val', 'groupMargin',     null);
-      bindRange('ps-levelSep',    'ps-levelSep-val',    'levelSeparation', null);
-      bindRange('ps-nodeSpacing', 'ps-nodeSpacing-val', 'nodeSpacing',     null);
-      bindRange('ps-springLen',   'ps-springLen-val',   'springLength',    null);
-      bindRange('ps-springK',     'ps-springK-val',     'springConstant',  100);
-      bindRange('ps-damping',     'ps-damping-val',     'damping',         100);
+      bindRange('ps-groupMargin',  'ps-groupMargin-val',  'groupMargin',           null);
+      bindRange('ps-levelSep',     'ps-levelSep-val',     'levelSeparation',       null);
+      bindRange('ps-nodeSpacing',  'ps-nodeSpacing-val',  'nodeSpacing',           null);
+      bindRange('ps-gravConst',    'ps-gravConst-val',    'gravitationalConstant', null);
+      bindRange('ps-centralGrav',  'ps-centralGrav-val',  'centralGravity',        100);
+      bindRange('ps-springLen',    'ps-springLen-val',    'springLength',          null);
+      bindRange('ps-springK',      'ps-springK-val',      'springConstant',        100);
+      bindRange('ps-damping',      'ps-damping-val',      'damping',               100);
 
       document.getElementById('ps-sortMethod').addEventListener('change', function() {
         window.physicsSettings.sortMethod = this.value;
-        // sortMethod only affects the next hierarchical layout call
+      });
+
+      document.getElementById('ps-physics-toggle').addEventListener('change', function() {
+        if (typeof graph !== 'undefined' && graph)
+          graph.setOptions({ physics: { enabled: this.checked } });
       });
     });
 </script>

@@ -1,0 +1,325 @@
+{% extends 'generic/_base.html' %}
+{% load static %}
+{% load helpers %}
+
+{% block title %}IP / Routing Topology{% endblock %}
+
+{% block head %}
+<link rel="stylesheet" href="{% static 'netbox_topology_views/css/vendor.css' %}">
+<link rel="stylesheet" href="{% static 'netbox_topology_views/css/app.css' %}">
+<style>
+  /* ── Graph canvas ────────────────────────────────── */
+  #ipgraph {
+    width: 100%;
+    position: relative;
+  }
+
+  /* ── Physics settings panel ──────────────────────── */
+  #ip-physics-panel .iph-section {
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: .05em;
+    opacity: .6;
+    margin: 10px 0 5px;
+  }
+  #ip-physics-panel .iph-row {
+    display: grid;
+    grid-template-columns: 1fr auto;
+    align-items: center;
+    gap: 3px;
+    margin-bottom: 8px;
+  }
+  #ip-physics-panel .iph-row label {
+    font-size: 12px;
+    margin-bottom: 2px;
+    grid-column: 1 / -1;
+  }
+  #ip-physics-panel .iph-row input[type=range] { width: 100%; }
+  #ip-physics-panel .iph-row span {
+    font-size: 12px;
+    text-align: right;
+    min-width: 48px;
+  }
+
+  /* ── VRF legend (bottom-left of graph) ───────────── */
+  .ip-vrf-legend {
+    position: absolute;
+    bottom: 16px;
+    left: 16px;
+    z-index: 10;
+    padding: 10px 14px;
+    font-size: 13px;
+    min-width: 190px;
+    max-height: 340px;
+    overflow-y: auto;
+    pointer-events: auto;
+    box-shadow: 0 2px 8px rgba(0,0,0,.2);
+  }
+  .ip-legend-title {
+    font-weight: 600;
+    margin-bottom: 7px;
+  }
+  .ip-legend-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 5px;
+    font-size: 12px;
+  }
+  .ip-legend-swatch {
+    display: inline-block;
+    width: 12px;
+    height: 12px;
+    border-radius: 3px;
+    flex-shrink: 0;
+  }
+
+  /* ── Edge-type legend (bottom-right of graph) ───── */
+  .ip-edge-legend {
+    position: absolute;
+    bottom: 16px;
+    right: 16px;
+    z-index: 10;
+    padding: 10px 14px;
+    font-size: 12px;
+    min-width: 170px;
+    pointer-events: auto;
+    box-shadow: 0 2px 8px rgba(0,0,0,.2);
+  }
+
+  /* ── Stats badge (top-right of graph) ────────────── */
+  .ip-stats-badge {
+    position: absolute;
+    top: 10px;
+    right: 12px;
+    z-index: 10;
+    padding: 3px 10px;
+    border-radius: 4px;
+    font-size: 11px;
+    background: rgba(108,117,125,.75);
+    color: #fff;
+    pointer-events: none;
+  }
+
+  /* ── Risk banner (top-centre of graph) ──────────── */
+  .ip-risk-banner {
+    position: absolute;
+    top: 10px;
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 10;
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    padding: 6px 18px;
+    border-radius: 6px;
+    border-left-width: 5px;
+    border-left-style: solid;
+    white-space: nowrap;
+    box-shadow: 0 2px 10px rgba(0,0,0,.25);
+    pointer-events: none;
+  }
+  .ip-risk-rating {
+    font-weight: 700;
+    font-size: 13px;
+    letter-spacing: .04em;
+  }
+  .ip-risk-counts { font-size: 12px; }
+  .ip-risk-findings { font-size: 11px; opacity: .6; }
+</style>
+{% endblock %}
+
+{% block controls %}
+<div class="controls">
+  <div class="control-group">
+
+    {# ── Filter form (GET) ── #}
+    <form method="get" class="d-flex align-items-center gap-2 flex-wrap">
+      <select name="vrf_id" class="form-select form-select-sm" style="max-width:180px"
+              onchange="this.form.submit()">
+        <option value="">All VRFs</option>
+        {% for vrf in vrfs %}
+          <option value="{{ vrf.pk }}"{% if selected_vrf == vrf.pk|stringformat:'s' %} selected{% endif %}>
+            {{ vrf.name }}
+          </option>
+        {% endfor %}
+      </select>
+
+      <select name="site_id" class="form-select form-select-sm" style="max-width:200px"
+              onchange="this.form.submit()">
+        <option value="">All Sites</option>
+        {% for site in sites %}
+          <option value="{{ site.pk }}"{% if selected_site == site.pk|stringformat:'s' %} selected{% endif %}>
+            {{ site.name }}
+          </option>
+        {% endfor %}
+      </select>
+
+      <div class="btn-group">
+        <button type="button" class="btn btn-sm btn-secondary dropdown-toggle" data-bs-toggle="dropdown">
+          <i class="mdi mdi-tune"></i> Options
+        </button>
+        <ul class="dropdown-menu p-2" style="min-width:220px">
+          <li>
+            <div class="form-check">
+              <input class="form-check-input" type="checkbox" name="show_internet" id="opt_internet"
+                     value="on" {% if show_internet == 'on' %}checked{% endif %}>
+              <label class="form-check-label" for="opt_internet">Show Internet hub</label>
+            </div>
+          </li>
+          <li>
+            <div class="form-check">
+              <input class="form-check-input" type="checkbox" name="show_asns" id="opt_asns"
+                     value="on" {% if show_asns == 'on' %}checked{% endif %}>
+              <label class="form-check-label" for="opt_asns">Show ASN nodes</label>
+            </div>
+          </li>
+          <li>
+            <div class="form-check">
+              <input class="form-check-input" type="checkbox" name="show_l2" id="opt_l2"
+                     value="on" {% if show_l2 == 'on' %}checked{% endif %}>
+              <label class="form-check-label" for="opt_l2">Show L2 VLANs</label>
+            </div>
+          </li>
+          <li>
+            <div class="form-check">
+              <input class="form-check-input" type="checkbox" name="show_prefix_edges" id="opt_pfxedge"
+                     value="on" {% if show_prefix_edges == 'on' %}checked{% endif %}>
+              <label class="form-check-label" for="opt_pfxedge">Show prefix hierarchy edges</label>
+            </div>
+          </li>
+          <li>
+            <div class="form-check">
+              <input class="form-check-input" type="checkbox" name="show_hosts" id="opt_hosts"
+                     value="on" {% if show_hosts == 'on' %}checked{% endif %}>
+              <label class="form-check-label" for="opt_hosts">Include host prefixes (/32, /128)</label>
+            </div>
+          </li>
+          <li><hr class="dropdown-divider my-1"></li>
+          <li>
+            <div class="form-check">
+              <input class="form-check-input" type="checkbox" name="show_vulns" id="opt_vulns"
+                     value="on" {% if show_vulns == 'on' %}checked{% endif %}>
+              <label class="form-check-label" for="opt_vulns">
+                <i class="mdi mdi-shield-alert-outline"></i> Show vulnerability flags
+              </label>
+            </div>
+          </li>
+          <li>
+            <div class="form-check">
+              <input class="form-check-input" type="checkbox" name="show_mac_adj" id="opt_mac_adj"
+                     value="on" {% if show_mac_adj == 'on' %}checked{% endif %}>
+              <label class="form-check-label" for="opt_mac_adj">
+                <i class="mdi mdi-table-network"></i> Show MAC adjacency (SNMP)
+              </label>
+            </div>
+          </li>
+          <li>
+            <div class="form-check">
+              <input class="form-check-input" type="checkbox" name="geo_seed" id="opt_geo_seed"
+                     value="on" {% if geo_seed == 'on' %}checked{% endif %}>
+              <label class="form-check-label" for="opt_geo_seed">
+                <i class="mdi mdi-map-marker-radius"></i> Geographic seeding (site lat/lon)
+              </label>
+            </div>
+          </li>
+          <li class="mt-2">
+            <button type="submit" class="btn btn-sm btn-primary w-100">Apply</button>
+          </li>
+        </ul>
+      </div>
+
+      <button type="submit" class="btn btn-sm btn-primary">
+        <i class="mdi mdi-magnify"></i> Draw
+      </button>
+    </form>
+
+    {# ── Graph controls ── #}
+    <button type="button" class="btn btn-secondary btn-sm" id="btnIPPhysics" title="Physics settings">
+      <i class="mdi mdi-tune-variant"></i> Physics
+    </button>
+
+    <button type="button" class="btn btn-secondary btn-sm" id="btnGroupUnallocated"
+            onclick="window.groupUnallocated()"
+            title="Group unallocated internet-facing nodes by ASN within the Internet bubble">
+      <i class="mdi mdi-earth"></i> Group Unallocated
+    </button>
+
+    <button type="button" class="btn btn-secondary btn-sm" id="btnGeoSeed"
+            onclick="window.applyGeoSeed()"
+            title="Reposition nodes by site geographic coordinates then resume physics">
+      <i class="mdi mdi-map-marker-radius"></i> Geo Seed
+    </button>
+
+    <button type="button" class="btn btn-secondary btn-sm" id="btnRiskGravity"
+            onclick="window.toggleRiskGravity()"
+            title="Pull nodes with open vulnerabilities toward the centre based on severity">
+      <i class="mdi mdi-shield-alert"></i> Risk Gravity
+    </button>
+
+    <button type="button" class="btn btn-secondary btn-sm" onclick="window.fitIPGraph()" title="Fit graph to screen">
+      <i class="mdi mdi-fit-to-screen"></i> Fit
+    </button>
+
+    <a href="{% url 'plugins:netbox_topology_views:home' %}" class="btn btn-secondary btn-sm">
+      <i class="mdi mdi-sitemap"></i> Physical Topology
+    </a>
+
+  </div>
+</div>
+{% endblock controls %}
+
+{% block content %}
+<div class="tab-content" id="tabcontentwrapper">
+  <div class="tab-pane show active" role="tabpanel">
+    {% if not topology_data or topology_data == 'null' %}
+      <div class="alert alert-info mt-3">
+        <i class="mdi mdi-information-outline"></i>
+        Select filters above and click <strong>Draw</strong> to render the IP topology,
+        or leave filters blank to show all IP-addressed devices.
+      </div>
+    {% else %}
+      <div class="panel-body">
+        <div id="ipgraph"></div>
+      </div>
+    {% endif %}
+  </div>
+</div>
+{% endblock content %}
+
+{% block javascript %}
+<script>
+  const brokenImage    = '{{ broken_image }}';
+  const ipTopologyData = {{ topology_data|safe }};
+
+  window.addEventListener('resize', resizeCanvas);
+  resizeCanvas();
+
+  function resizeCanvas() {
+    const subtract =
+      getH('.page-header') +
+      getH('.footer') +
+      getH('.controls') +
+      getPad('#tabcontentwrapper') +
+      8;
+    const el = document.getElementById('ipgraph');
+    if (el) el.style.height = 'calc(100vh - ' + subtract + 'px)';
+  }
+
+  function getH(sel) {
+    const el = document.querySelector(sel);
+    if (!el) return 0;
+    const s = getComputedStyle(el);
+    return el.offsetHeight + parseInt(s.marginTop) + parseInt(s.marginBottom);
+  }
+
+  function getPad(sel) {
+    const el = document.querySelector(sel);
+    if (!el) return 0;
+    const s = getComputedStyle(el);
+    return parseInt(s.paddingTop) + parseInt(s.paddingBottom);
+  }
+</script>
+<script src="{% static 'netbox_topology_views/js/ip_topology.js' %}" defer></script>
+{% endblock javascript %}

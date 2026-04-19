@@ -15,7 +15,8 @@ const noCache = ARGS.includes('--no-cache')
 async function bundleScripts() {
     const entryPoints = {
         app: 'js/home.js',
-        images: 'js/images.js'
+        images: 'js/images.js',
+        ip_topology: 'js/ip_topology.js'
     }
 
     try {
