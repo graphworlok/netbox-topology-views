@@ -1845,7 +1845,7 @@ def get_ip_topology_data(request):
             "vrf_name":   vrf_name,
             "prefix_len": plen,
             "family":     family,
-            "site_id":    p.site_id,
+            "site_id":    p._site_id if _pfx_has_underscore_site else p.site_id,
             "is_prefix":  True,
             "is_public":  is_pub,
         })
