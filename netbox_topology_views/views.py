@@ -2344,12 +2344,14 @@ class IPTopologyView(PermissionRequiredMixin, View):
         from ipam.models import VRF, Prefix
         from dcim.models import Site
 
-        topo_data = None
+        topo_data  = None
+        topo_error = None
         if request.GET:
             try:
                 topo_data = get_ip_topology_data(request)
-            except Exception:
+            except Exception as exc:
                 import traceback
+                topo_error = traceback.format_exc()
                 traceback.print_exc()
 
         vrfs   = VRF.objects.all().order_by('name')
@@ -2357,6 +2359,7 @@ class IPTopologyView(PermissionRequiredMixin, View):
 
         return render(request, "netbox_topology_views/ip_topology.html", {
             "topology_data":      json.dumps(topo_data),
+            "topo_error":         topo_error,
             "broken_image":       find_image_url("role-unknown"),
             "basepath":           settings.BASE_PATH,
             "vrfs":               vrfs,

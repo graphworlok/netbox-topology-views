@@ -273,7 +273,12 @@
 {% block content %}
 <div class="tab-content" id="tabcontentwrapper">
   <div class="tab-pane show active" role="tabpanel">
-    {% if not topology_data or topology_data == 'null' %}
+    {% if topo_error %}
+      <div class="alert alert-danger mt-3">
+        <strong><i class="mdi mdi-alert-circle-outline"></i> Error building IP topology:</strong>
+        <pre class="mt-2 mb-0" style="font-size:11px;white-space:pre-wrap">{{ topo_error }}</pre>
+      </div>
+    {% elif not topology_data or topology_data == 'null' %}
       <div class="alert alert-info mt-3">
         <i class="mdi mdi-information-outline"></i>
         Select filters above and click <strong>Draw</strong> to render the IP topology,
