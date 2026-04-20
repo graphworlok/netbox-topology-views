@@ -299,31 +299,16 @@
   const ipTopologyData = {{ topology_data|safe }};
 
   window.addEventListener('resize', resizeCanvas);
-  resizeCanvas();
+  // Defer first call so the graph div is fully laid out before measuring.
+  requestAnimationFrame(resizeCanvas);
 
   function resizeCanvas() {
-    const subtract =
-      getH('.page-header') +
-      getH('.footer') +
-      getH('.controls') +
-      getPad('#tabcontentwrapper') +
-      8;
     const el = document.getElementById('ipgraph');
-    if (el) el.style.height = 'calc(100vh - ' + subtract + 'px)';
-  }
-
-  function getH(sel) {
-    const el = document.querySelector(sel);
-    if (!el) return 0;
-    const s = getComputedStyle(el);
-    return el.offsetHeight + parseInt(s.marginTop) + parseInt(s.marginBottom);
-  }
-
-  function getPad(sel) {
-    const el = document.querySelector(sel);
-    if (!el) return 0;
-    const s = getComputedStyle(el);
-    return parseInt(s.paddingTop) + parseInt(s.paddingBottom);
+    if (!el) return;
+    const footer = document.querySelector('.footer');
+    const footerH = footer ? footer.offsetHeight + 8 : 16;
+    const top = el.getBoundingClientRect().top + window.scrollY;
+    el.style.height = Math.max(300, window.innerHeight - top - footerH) + 'px';
   }
 </script>
 <script src="{% static 'netbox_topology_views/js/ip_topology.js' %}" defer></script>
