@@ -1847,6 +1847,7 @@ def get_ip_topology_data(request):
             "prefix_len": plen,
             "family":     family,
             "site_id":    p._site_id if _pfx_has_underscore_site else p.site_id,
+            "site_name":  str(p_site) if p_site else None,
             "is_prefix":  True,
             "is_public":  is_pub,
         })
@@ -1943,6 +1944,7 @@ def get_ip_topology_data(request):
                 "color":         {"border": role_color},
                 "device_status": device.status,
                 "site_id":       device.site_id,
+                "site_name":     str(device.site) if device.site else None,
                 "is_device":     True,
             })
             device_node_ids[dev_pk] = dev_id

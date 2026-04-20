@@ -95,6 +95,9 @@ const topoData  = typeof ipTopologyData !== 'undefined' ? ipTopologyData : null
 
     graph = new Network(container, { nodes, edges }, visOptions)
 
+    _initBubbleGroups()
+    graph.on('afterDrawing', ctx => _drawBubbles(ctx))
+
     graph.once('stabilizationIterationsDone', () => {
         graph.setOptions({ physics: { stabilization: { enabled: false } } })
         graph.fit({ animation: { duration: 600, easingFunction: 'easeInOutQuad' } })
@@ -138,6 +141,107 @@ const topoData  = typeof ipTopologyData !== 'undefined' ? ipTopologyData : null
     // ── Edge type visibility toggles ──
     buildEdgeLegend(edges)
 })()
+
+// -----------------------------------------------------------------------
+// Group bubbles — draw enclosing circles around logical groups
+// -----------------------------------------------------------------------
+
+let _bubblesEnabled = false
+const _bubbleGroups = []   // [{ ids[], label, fill, stroke }]
+
+function _initBubbleGroups() {
+    if (!topoData || !topoData.nodes) return
+
+    // Internet bubble: internet hub + ASN nodes + public prefixes
+    const internetIds = []
+    for (const n of topoData.nodes) {
+        if (n.is_internet || n.is_asn || (n.is_prefix && n.is_public)) {
+            internetIds.push(n.id)
+        }
+    }
+    if (internetIds.length) {
+        _bubbleGroups.push({
+            ids:    internetIds,
+            label:  'The Internet',
+            fill:   'rgba(21,101,192,0.07)',
+            stroke: '#1565C0',
+        })
+    }
+
+    // Per-site bubbles: devices, VMs, and private prefixes grouped by site
+    const siteMap = new Map()
+    for (const n of topoData.nodes) {
+        if (!n.site_id) continue
+        if (!n.is_device && !n.is_vm && !(n.is_prefix && !n.is_public)) continue
+        if (!siteMap.has(n.site_id)) {
+            siteMap.set(n.site_id, { ids: [], label: n.site_name || `Site ${n.site_id}` })
+        }
+        siteMap.get(n.site_id).ids.push(n.id)
+    }
+
+    const SITE_PALETTE = [
+        ['rgba(46,125,50,0.07)',   '#2E7D32'],
+        ['rgba(123,31,162,0.07)',  '#7B1FA2'],
+        ['rgba(183,28,28,0.07)',   '#B71C1C'],
+        ['rgba(230,81,0,0.07)',    '#E65100'],
+        ['rgba(0,131,143,0.07)',   '#00838F'],
+        ['rgba(84,110,122,0.07)',  '#546E7A'],
+        ['rgba(161,136,127,0.07)', '#A1887F'],
+    ]
+    let ci = 0
+    for (const [, { ids, label }] of siteMap) {
+        const [fill, stroke] = SITE_PALETTE[ci % SITE_PALETTE.length]
+        ci++
+        _bubbleGroups.push({ ids, label, fill, stroke })
+    }
+}
+
+function _drawBubbles(ctx) {
+    if (!_bubblesEnabled || !graph || !_bubbleGroups.length) return
+    for (const g of _bubbleGroups) _drawOneBubble(ctx, g)
+}
+
+function _drawOneBubble(ctx, { ids, label, fill, stroke }) {
+    const pos = graph.getPositions(ids)
+    const pts = Object.values(pos)
+    if (!pts.length) return
+
+    let cx = 0, cy = 0
+    for (const p of pts) { cx += p.x; cy += p.y }
+    cx /= pts.length; cy /= pts.length
+
+    let r = 60
+    for (const p of pts) r = Math.max(r, Math.hypot(p.x - cx, p.y - cy))
+    r += 80
+
+    ctx.save()
+    ctx.beginPath()
+    ctx.arc(cx, cy, r, 0, 2 * Math.PI)
+    ctx.fillStyle = fill
+    ctx.fill()
+    ctx.setLineDash([8, 5])
+    ctx.strokeStyle = stroke
+    ctx.lineWidth = 2
+    ctx.stroke()
+    ctx.setLineDash([])
+    ctx.font = 'bold 13px helvetica, sans-serif'
+    ctx.fillStyle = stroke
+    ctx.globalAlpha = 0.85
+    ctx.textAlign = 'center'
+    ctx.textBaseline = 'bottom'
+    ctx.fillText(label, cx, cy - r + 2)
+    ctx.restore()
+}
+
+window.toggleBubbles = function() {
+    _bubblesEnabled = !_bubblesEnabled
+    const btn = document.getElementById('btnBubbles')
+    if (btn) {
+        btn.classList.toggle('btn-primary',   _bubblesEnabled)
+        btn.classList.toggle('btn-secondary', !_bubblesEnabled)
+    }
+    if (graph) graph.redraw()
+}
 
 // -----------------------------------------------------------------------
 // VRF / routing-domain legend (bottom-left of graph)
