@@ -1685,11 +1685,20 @@ def get_ip_topology_data(request):
     geo_seed          = request.GET.get('geo_seed', '')           == 'on'
 
     # --- Prefixes ---
-    prefix_qs = Prefix.objects.select_related('vrf', 'site', 'role', 'tenant').order_by('prefix')
+    # NetBox 4.x renamed the direct site FK to _site / _site_id on Prefix.
+    _pfx_has_underscore_site = any(
+        f.name == '_site' for f in Prefix._meta.get_fields()
+    )
+    _pfx_site_related = '_site' if _pfx_has_underscore_site else 'site'
+    _pfx_site_filter  = '_site_id' if _pfx_has_underscore_site else 'site_id'
+
+    prefix_qs = Prefix.objects.select_related(
+        'vrf', _pfx_site_related, 'role', 'tenant'
+    ).order_by('prefix')
     if vrf_id:
         prefix_qs = prefix_qs.filter(vrf_id=vrf_id)
     if site_id:
-        prefix_qs = prefix_qs.filter(site_id=site_id)
+        prefix_qs = prefix_qs.filter(**{_pfx_site_filter: site_id})
 
     prefixes = list(prefix_qs)
     if not show_hosts:
