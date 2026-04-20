@@ -1804,6 +1804,7 @@ def get_ip_topology_data(request):
 
         vrf_key  = str(p.vrf_id) if p.vrf_id else "global"
         vrf_name = p.vrf.name if p.vrf else "Global"
+        p_site   = p._site if _pfx_has_underscore_site else p.site
         color    = "#1565C0" if is_pub else _hash_color(vrf_key)
 
         plen     = p.prefix.prefixlen
@@ -1837,7 +1838,7 @@ def get_ip_topology_data(request):
                 f"VRF: {vrf_name}<br>"
                 f"Status: {p.status}<br>"
                 f"Description: {p.description or '—'}<br>"
-                f"Site: {p.site or '—'}"
+                f"Site: {p_site or '—'}"
             ),
             "physics":    True,
             "x": 0, "y": 0,
@@ -1854,8 +1855,9 @@ def get_ip_topology_data(request):
         if show_internet and is_pub and (has_public_prefixes or asn_node_ids):
             target_id    = internet_id
             edge_color   = "#1565C0"
-            if show_asns and p.site_id and p.site_id in site_asns:
-                asn_pk     = site_asns[p.site_id][0]
+            _p_site_id = p._site_id if _pfx_has_underscore_site else p.site_id
+            if show_asns and _p_site_id and _p_site_id in site_asns:
+                asn_pk     = site_asns[_p_site_id][0]
                 target_id  = asn_node_ids[asn_pk]
                 edge_color = "#FF9800"
             edge_id += 1
