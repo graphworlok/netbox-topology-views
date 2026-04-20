@@ -83,6 +83,7 @@ menu = PluginMenu(
             (
                 PluginMenuItem(link="plugins:netbox_topology_views:home", link_text="Topology", permissions=["dcim.view_site", "dcim.view_device"]),
                 PluginMenuItem(link="plugins:netbox_topology_views:ip_topology", link_text="IP / Routing Topology", permissions=["dcim.view_device", "ipam.view_prefix", "ipam.view_ipaddress"]),
+                PluginMenuItem(link="plugins:netbox_topology_views:site_topology", link_text="Site / Region Topology", permissions=["dcim.view_site", "dcim.view_region"]),
             ),
         ),
         ('COORDINATES', 

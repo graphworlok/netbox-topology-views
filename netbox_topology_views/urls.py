@@ -9,6 +9,7 @@ urlpatterns = (
     path("", RedirectView.as_view(url="topology/", permanent=True)),
     path("topology/", views.TopologyHomeView.as_view(), name="home"),
     path("ip-topology/", views.IPTopologyView.as_view(), name="ip_topology"),
+    path("site-topology/", views.SiteTopologyView.as_view(), name="site_topology"),
     path("alert-status/", views.AlertStatusView.as_view(), name="alert_status"),
     path("metrics/", views.MetricsView.as_view(), name="metrics"),
     path("vulnerabilities/", views.VulnerabilityView.as_view(), name="vulnerabilities"),

@@ -2390,6 +2390,241 @@ class IPTopologyView(PermissionRequiredMixin, View):
         })
 
 
+def get_site_topology_data(request):
+    from dcim.models import Site, Region
+
+    region_id          = request.GET.get('region_id')  or None
+    tenant_id          = request.GET.get('tenant_id')  or None
+    show_circuits      = request.GET.get('show_circuits', 'on')     == 'on'
+    show_regions       = request.GET.get('show_regions', 'on')      == 'on'
+    show_device_counts = request.GET.get('show_device_counts', '')  == 'on'
+
+    # ── Sites ─────────────────────────────────────────────────────────────
+    site_qs = Site.objects.select_related('region', 'tenant', 'group').order_by('name')
+    if region_id:
+        try:
+            root = Region.objects.get(pk=region_id)
+            try:
+                descendant_ids = root.get_descendants(include_self=True).values_list('pk', flat=True)
+                site_qs = site_qs.filter(region_id__in=descendant_ids)
+            except Exception:
+                site_qs = site_qs.filter(region_id=region_id)
+        except Region.DoesNotExist:
+            pass
+    if tenant_id:
+        site_qs = site_qs.filter(tenant_id=tenant_id)
+
+    sites = list(site_qs)
+    nodes = []
+    edges = []
+    edge_id = 0
+
+    # ── Region nodes ──────────────────────────────────────────────────────
+    region_node_ids = {}
+    if show_regions:
+        regions_needed = {}
+        for site in sites:
+            r = site.region
+            while r:
+                if r.pk not in regions_needed:
+                    regions_needed[r.pk] = r
+                r = getattr(r, 'parent', None)
+
+        for rpk, region in regions_needed.items():
+            rid   = f"region_{rpk}"
+            color = _hash_color(str(rpk))
+            region_node_ids[rpk] = rid
+            nodes.append({
+                "id":     rid,
+                "label":  region.name,
+                "shape":  "diamond",
+                "size":   44,
+                "color": {
+                    "border":     color,
+                    "background": color + "33",
+                    "highlight":  {"border": color, "background": color + "55"},
+                },
+                "font":    {"size": 14, "bold": True},
+                "href":    region.get_absolute_url(),
+                "title":   f"<b>{region.name}</b><br>Region",
+                "physics": True,
+                "x": 0, "y": 0,
+                "is_region":        True,
+                "parent_region_pk": getattr(region, 'parent_id', None),
+            })
+
+        # Region hierarchy edges
+        for rpk, region in regions_needed.items():
+            par_id = getattr(region, 'parent_id', None)
+            if par_id and par_id in region_node_ids:
+                edge_id += 1
+                edges.append({
+                    "id":     edge_id,
+                    "from":   region_node_ids[rpk],
+                    "to":     region_node_ids[par_id],
+                    "length": 220,
+                    "color":  {"color": "#aaa", "opacity": 0.4},
+                    "width":  1,
+                    "dashes": [4, 4],
+                    "smooth": {"type": "dynamic"},
+                    "title":  "Region hierarchy",
+                    "is_hierarchy": True,
+                })
+
+    # ── Site nodes ────────────────────────────────────────────────────────
+    STATUS_COLORS = {
+        'active':          '#4CAF50',
+        'planned':         '#2196F3',
+        'staging':         '#FF9800',
+        'decommissioning': '#F44336',
+        'retired':         '#9E9E9E',
+    }
+    site_node_ids = {}
+    for site in sites:
+        sid    = f"site_{site.pk}"
+        site_node_ids[site.pk] = sid
+        border = STATUS_COLORS.get(site.status, '#607D8B')
+
+        label = site.name
+        if show_device_counts:
+            dc    = site.devices.count()
+            label += f"\n{dc} device{'s' if dc != 1 else ''}"
+
+        nodes.append({
+            "id":    sid,
+            "label": label,
+            "shape": "dot",
+            "size":  28,
+            "color": {
+                "border":     border,
+                "background": "#ffffff",
+                "highlight":  {"border": border, "background": "#f5f5f5"},
+            },
+            "font":  {"size": 12},
+            "href":  site.get_absolute_url(),
+            "title": (
+                f"<b>{site.name}</b><br>"
+                f"Status: {site.status}<br>"
+                f"Region: {site.region or '—'}<br>"
+                f"Tenant: {site.tenant or '—'}"
+            ),
+            "physics":   True,
+            "x": 0, "y": 0,
+            "is_site":   True,
+            "region_pk": site.region_id,
+            "status":    site.status,
+        })
+
+        # Spring edge: site → parent region (drives the attraction physics)
+        if show_regions and site.region_id and site.region_id in region_node_ids:
+            edge_id += 1
+            edges.append({
+                "id":     edge_id,
+                "from":   sid,
+                "to":     region_node_ids[site.region_id],
+                "length": 180,
+                "color":  {"color": "#cccccc", "opacity": 0.35},
+                "width":  1,
+                "smooth": {"type": "dynamic"},
+                "title":  f"{site.name} → {site.region}",
+                "is_membership": True,
+            })
+
+    # ── Circuits ──────────────────────────────────────────────────────────
+    circuit_count = 0
+    if show_circuits and site_node_ids:
+        try:
+            from circuits.models import CircuitTermination
+            terms = (
+                CircuitTermination.objects
+                .filter(site_id__in=list(site_node_ids.keys()))
+                .select_related('circuit__type', 'circuit__provider', 'site')
+            )
+            by_circuit = {}
+            for t in terms:
+                by_circuit.setdefault(t.circuit_id, []).append(t)
+
+            for cid, tlist in by_circuit.items():
+                site_terms = [t for t in tlist if t.site_id in site_node_ids]
+                if len(site_terms) < 2:
+                    continue
+                t_a, t_b = site_terms[0], site_terms[1]
+                if t_a.site_id == t_b.site_id:
+                    continue
+                circuit = t_a.circuit
+                edge_id += 1
+                circuit_count += 1
+                edges.append({
+                    "id":     edge_id,
+                    "from":   site_node_ids[t_a.site_id],
+                    "to":     site_node_ids[t_b.site_id],
+                    "length": 300,
+                    "color":  {"color": "#1565C0", "opacity": 0.7},
+                    "width":  2,
+                    "smooth": {"type": "dynamic"},
+                    "title":  (
+                        f"<b>{circuit.cid}</b><br>"
+                        f"Provider: {circuit.provider}<br>"
+                        f"Type: {circuit.type}"
+                    ),
+                    "label":  circuit.type.name if circuit.type else "",
+                    "font":   {"size": 9, "color": "#555"},
+                    "href":   circuit.get_absolute_url(),
+                    "is_circuit": True,
+                })
+        except Exception:
+            import traceback
+            traceback.print_exc()
+
+    return {
+        "nodes":         nodes,
+        "edges":         edges,
+        "circuit_count": circuit_count,
+        "options": {
+            "show_circuits":      show_circuits,
+            "show_regions":       show_regions,
+            "show_device_counts": show_device_counts,
+        },
+    }
+
+
+class SiteTopologyView(PermissionRequiredMixin, View):
+    """Physics-based topology derived from site and region relationships."""
+
+    permission_required = ("dcim.view_site", "dcim.view_region")
+
+    def get(self, request):
+        from dcim.models import Region, Site
+        from tenancy.models import Tenant
+
+        topo_data  = None
+        topo_error = None
+        if request.GET:
+            try:
+                topo_data = get_site_topology_data(request)
+            except Exception:
+                import traceback
+                topo_error = traceback.format_exc()
+                traceback.print_exc()
+
+        regions = Region.objects.all().order_by('name')
+        tenants = Tenant.objects.all().order_by('name')
+
+        return render(request, "netbox_topology_views/site_topology.html", {
+            "topology_data":      json.dumps(topo_data),
+            "topo_error":         topo_error,
+            "broken_image":       find_image_url("role-unknown"),
+            "basepath":           settings.BASE_PATH,
+            "regions":            regions,
+            "tenants":            tenants,
+            "selected_region":    request.GET.get('region_id', ''),
+            "selected_tenant":    request.GET.get('tenant_id', ''),
+            "show_circuits":      request.GET.get('show_circuits', 'on'),
+            "show_regions":       request.GET.get('show_regions', 'on'),
+            "show_device_counts": request.GET.get('show_device_counts', ''),
+        })
+
+
 class TopologyImagesView(PermissionRequiredMixin, View):
     permission_required = (
         "dcim.view_site",

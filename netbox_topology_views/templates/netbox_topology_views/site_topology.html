@@ -1,0 +1,152 @@
+{% extends 'generic/_base.html' %}
+{% load static %}
+{% load helpers %}
+
+{% block title %}Site / Region Topology{% endblock %}
+
+{% block head %}
+<link rel="stylesheet" href="{% static 'netbox_topology_views/css/vendor.css' %}">
+<link rel="stylesheet" href="{% static 'netbox_topology_views/css/app.css' %}">
+<style>
+  /* ── Graph canvas ────────────────────────────────── */
+  #sitegraph {
+    width: 100%;
+    position: relative;
+  }
+
+  /* ── Stats badge (top-right of graph) ────────────── */
+  .site-stats-badge {
+    position: absolute;
+    top: 10px;
+    right: 12px;
+    z-index: 10;
+    padding: 3px 10px;
+    border-radius: 4px;
+    font-size: 11px;
+    background: rgba(108,117,125,.75);
+    color: #fff;
+    pointer-events: none;
+  }
+</style>
+{% endblock %}
+
+{% block controls %}
+<div class="controls">
+  <div class="control-group">
+
+    {# ── Filter form (GET) ── #}
+    <form method="get" class="d-flex align-items-center gap-2 flex-wrap">
+      <select name="region_id" class="form-select form-select-sm" style="max-width:200px">
+        <option value="">All Regions</option>
+        {% for r in regions %}
+          <option value="{{ r.pk }}"{% if selected_region == r.pk|stringformat:'s' %} selected{% endif %}>
+            {{ r.name }}
+          </option>
+        {% endfor %}
+      </select>
+
+      <select name="tenant_id" class="form-select form-select-sm" style="max-width:200px">
+        <option value="">All Tenants</option>
+        {% for t in tenants %}
+          <option value="{{ t.pk }}"{% if selected_tenant == t.pk|stringformat:'s' %} selected{% endif %}>
+            {{ t.name }}
+          </option>
+        {% endfor %}
+      </select>
+
+      <div class="btn-group">
+        <button type="button" class="btn btn-sm btn-secondary dropdown-toggle" data-bs-toggle="dropdown">
+          <i class="mdi mdi-tune"></i> Options
+        </button>
+        <ul class="dropdown-menu p-2" style="min-width:240px">
+          <li>
+            <div class="form-check">
+              <input class="form-check-input" type="checkbox" name="show_circuits" id="opt_circuits"
+                     value="on" {% if show_circuits == 'on' %}checked{% endif %}>
+              <label class="form-check-label" for="opt_circuits">Show circuits</label>
+            </div>
+          </li>
+          <li>
+            <div class="form-check">
+              <input class="form-check-input" type="checkbox" name="show_regions" id="opt_regions"
+                     value="on" {% if show_regions == 'on' %}checked{% endif %}>
+              <label class="form-check-label" for="opt_regions">Show region nodes</label>
+            </div>
+          </li>
+          <li>
+            <div class="form-check">
+              <input class="form-check-input" type="checkbox" name="show_device_counts" id="opt_device_counts"
+                     value="on" {% if show_device_counts == 'on' %}checked{% endif %}>
+              <label class="form-check-label" for="opt_device_counts">Show device counts on sites</label>
+            </div>
+          </li>
+          <li class="mt-2">
+            <button type="submit" class="btn btn-sm btn-primary w-100">Apply</button>
+          </li>
+        </ul>
+      </div>
+
+      <button type="submit" class="btn btn-sm btn-primary">
+        <i class="mdi mdi-magnify"></i> Draw
+      </button>
+    </form>
+
+    {# ── Graph controls ── #}
+    <button type="button" class="btn btn-secondary btn-sm" id="btnSiteFit"
+            onclick="window.fitSiteGraph()" title="Fit graph to screen">
+      <i class="mdi mdi-fit-to-screen"></i> Fit
+    </button>
+
+    <a href="{% url 'plugins:netbox_topology_views:ip_topology' %}" class="btn btn-secondary btn-sm">
+      <i class="mdi mdi-ip-network-outline"></i> IP / Routing Topology
+    </a>
+
+    <a href="{% url 'plugins:netbox_topology_views:home' %}" class="btn btn-secondary btn-sm">
+      <i class="mdi mdi-sitemap"></i> Physical Topology
+    </a>
+
+  </div>
+</div>
+{% endblock controls %}
+
+{% block content %}
+<div class="tab-content" id="tabcontentwrapper">
+  <div class="tab-pane show active" role="tabpanel">
+    {% if topo_error %}
+      <div class="alert alert-danger mt-3">
+        <strong><i class="mdi mdi-alert-circle-outline"></i> Error building site topology:</strong>
+        <pre class="mt-2 mb-0" style="font-size:11px;white-space:pre-wrap">{{ topo_error }}</pre>
+      </div>
+    {% elif not topology_data or topology_data == 'null' %}
+      <div class="alert alert-info mt-3">
+        <i class="mdi mdi-information-outline"></i>
+        Select filters above and click <strong>Draw</strong> to render the site / region topology,
+        or leave filters blank to show all sites.
+      </div>
+    {% else %}
+      <div class="panel-body">
+        <div id="sitegraph"></div>
+      </div>
+    {% endif %}
+  </div>
+</div>
+{% endblock content %}
+
+{% block javascript %}
+<script>
+  const siteTopologyData = {{ topology_data|safe }};
+
+  window.addEventListener('resize', resizeCanvas);
+  requestAnimationFrame(resizeCanvas);
+
+  function resizeCanvas() {
+    const el = document.getElementById('sitegraph');
+    if (!el) return;
+    const footer = document.querySelector('.footer');
+    const footerH = footer ? footer.offsetHeight + 8 : 16;
+    const top = el.getBoundingClientRect().top + window.scrollY;
+    el.style.height = Math.max(300, window.innerHeight - top - footerH) + 'px';
+  }
+</script>
+<script src="{% static 'netbox_topology_views/js/site_topology.js' %}" defer></script>
+{% endblock javascript %}
