@@ -163,7 +163,7 @@ function _initBubbleGroups() {
         _bubbleGroups.push({
             ids:    internetIds,
             label:  'The Internet',
-            fill:   'rgba(21,101,192,0.07)',
+            fill:   'rgba(21,101,192,0.12)',
             stroke: '#1565C0',
         })
     }
@@ -180,13 +180,13 @@ function _initBubbleGroups() {
     }
 
     const SITE_PALETTE = [
-        ['rgba(46,125,50,0.07)',   '#2E7D32'],
-        ['rgba(123,31,162,0.07)',  '#7B1FA2'],
-        ['rgba(183,28,28,0.07)',   '#B71C1C'],
-        ['rgba(230,81,0,0.07)',    '#E65100'],
-        ['rgba(0,131,143,0.07)',   '#00838F'],
-        ['rgba(84,110,122,0.07)',  '#546E7A'],
-        ['rgba(161,136,127,0.07)', '#A1887F'],
+        ['rgba(46,125,50,0.12)',   '#2E7D32'],
+        ['rgba(123,31,162,0.12)',  '#7B1FA2'],
+        ['rgba(183,28,28,0.12)',   '#B71C1C'],
+        ['rgba(230,81,0,0.12)',    '#E65100'],
+        ['rgba(0,131,143,0.12)',   '#00838F'],
+        ['rgba(84,110,122,0.12)',  '#546E7A'],
+        ['rgba(161,136,127,0.12)', '#A1887F'],
     ]
     let ci = 0
     for (const [, { ids, label }] of siteMap) {
@@ -198,10 +198,12 @@ function _initBubbleGroups() {
 
 function _drawBubbles(ctx) {
     if (!_bubblesEnabled || !graph || !_bubbleGroups.length) return
-    for (const g of _bubbleGroups) _drawOneBubble(ctx, g)
+    // lineWidth and font size must be in screen pixels regardless of zoom
+    const scale = graph.getScale() || 1
+    for (const g of _bubbleGroups) _drawOneBubble(ctx, g, scale)
 }
 
-function _drawOneBubble(ctx, { ids, label, fill, stroke }) {
+function _drawOneBubble(ctx, { ids, label, fill, stroke }, scale) {
     const pos = graph.getPositions(ids)
     const pts = Object.values(pos)
     if (!pts.length) return
@@ -210,31 +212,41 @@ function _drawOneBubble(ctx, { ids, label, fill, stroke }) {
     for (const p of pts) { cx += p.x; cy += p.y }
     cx /= pts.length; cy /= pts.length
 
+    // Radius in network units; padding also in network units so it scales naturally
     let r = 60
     for (const p of pts) r = Math.max(r, Math.hypot(p.x - cx, p.y - cy))
     r += 80
 
     ctx.save()
+
+    // Filled circle
     ctx.beginPath()
     ctx.arc(cx, cy, r, 0, 2 * Math.PI)
     ctx.fillStyle = fill
     ctx.fill()
-    ctx.setLineDash([8, 5])
+
+    // Dashed border — use screen-pixel lineWidth so it's always visible at any zoom
+    ctx.setLineDash([8 / scale, 5 / scale])
     ctx.strokeStyle = stroke
-    ctx.lineWidth = 2
+    ctx.lineWidth = 2 / scale
     ctx.stroke()
     ctx.setLineDash([])
-    ctx.font = 'bold 13px helvetica, sans-serif'
+
+    // Label at top of circle — font size in screen pixels
+    ctx.font = `bold ${14 / scale}px helvetica, sans-serif`
     ctx.fillStyle = stroke
-    ctx.globalAlpha = 0.85
+    ctx.globalAlpha = 0.9
     ctx.textAlign = 'center'
     ctx.textBaseline = 'bottom'
-    ctx.fillText(label, cx, cy - r + 2)
+    ctx.fillText(label, cx, cy - r - 4 / scale)
+
     ctx.restore()
 }
 
 window.toggleBubbles = function() {
     _bubblesEnabled = !_bubblesEnabled
+    console.log('[bubbles] enabled:', _bubblesEnabled, '| groups:', _bubbleGroups.length,
+        _bubbleGroups.map(g => g.label + '(' + g.ids.length + ')'))
     const btn = document.getElementById('btnBubbles')
     if (btn) {
         btn.classList.toggle('btn-primary',   _bubblesEnabled)
