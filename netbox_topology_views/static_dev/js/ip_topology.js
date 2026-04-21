@@ -96,7 +96,7 @@ const topoData  = typeof ipTopologyData !== 'undefined' ? ipTopologyData : null
     graph = new Network(container, { nodes, edges }, visOptions)
 
     _initBubbleGroups()
-    graph.on('afterDrawing', ctx => _drawBubbles(ctx))
+    graph.on('beforeDrawing', ctx => _drawBubbles(ctx))
 
     graph.once('stabilizationIterationsDone', () => {
         graph.setOptions({ physics: { stabilization: { enabled: false } } })
@@ -163,7 +163,7 @@ function _initBubbleGroups() {
         _bubbleGroups.push({
             ids:    internetIds,
             label:  'The Internet',
-            fill:   'rgba(21,101,192,0.12)',
+            fill:   'rgba(21,101,192,0.18)',
             stroke: '#1565C0',
         })
     }
@@ -180,13 +180,13 @@ function _initBubbleGroups() {
     }
 
     const SITE_PALETTE = [
-        ['rgba(46,125,50,0.12)',   '#2E7D32'],
-        ['rgba(123,31,162,0.12)',  '#7B1FA2'],
-        ['rgba(183,28,28,0.12)',   '#B71C1C'],
-        ['rgba(230,81,0,0.12)',    '#E65100'],
-        ['rgba(0,131,143,0.12)',   '#00838F'],
-        ['rgba(84,110,122,0.12)',  '#546E7A'],
-        ['rgba(161,136,127,0.12)', '#A1887F'],
+        ['rgba(46,125,50,0.18)',   '#2E7D32'],
+        ['rgba(123,31,162,0.18)',  '#7B1FA2'],
+        ['rgba(183,28,28,0.18)',   '#B71C1C'],
+        ['rgba(230,81,0,0.18)',    '#E65100'],
+        ['rgba(0,131,143,0.18)',   '#00838F'],
+        ['rgba(84,110,122,0.18)',  '#546E7A'],
+        ['rgba(161,136,127,0.18)', '#A1887F'],
     ]
     let ci = 0
     for (const [, { ids, label }] of siteMap) {
@@ -228,7 +228,7 @@ function _drawOneBubble(ctx, { ids, label, fill, stroke }, scale) {
     // Dashed border — use screen-pixel lineWidth so it's always visible at any zoom
     ctx.setLineDash([8 / scale, 5 / scale])
     ctx.strokeStyle = stroke
-    ctx.lineWidth = 2 / scale
+    ctx.lineWidth = 2.5 / scale
     ctx.stroke()
     ctx.setLineDash([])
 
