@@ -1739,14 +1739,8 @@ def get_ip_topology_data(request):
                 nodes.append({
                     "id":      asn_nid,
                     "label":   label,
-                    "shape":   "box",
-                    "size":    22,
-                    "color": {
-                        "border":     "#FF9800",
-                        "background": "#FFF3E0",
-                        "highlight":  {"border": "#E65100", "background": "#FFE0B2"},
-                    },
-                    "font":    {"size": 11},
+                    "shape":   "text",
+                    "font":    {"size": 13, "bold": True, "color": "#E65100"},
                     "href":    asn_obj.get_absolute_url(),
                     "title":   f"<b>AS{asn_obj.asn}</b><br>{asn_obj.description or ''}",
                     "physics": True,
@@ -1765,15 +1759,9 @@ def get_ip_topology_data(request):
     if show_internet and (has_public_prefixes or asn_node_ids):
         nodes.insert(0, {
             "id":      internet_id,
-            "label":   "The\nInternet",
-            "shape":   "ellipse",
-            "size":    55,
-            "color": {
-                "border":     "#1565C0",
-                "background": "#E3F2FD",
-                "highlight":  {"border": "#0D47A1", "background": "#BBDEFB"},
-            },
-            "font":    {"size": 14, "bold": True, "color": "#1565C0"},
+            "label":   "The Internet",
+            "shape":   "text",
+            "font":    {"size": 15, "bold": True, "color": "#1565C0"},
             "physics": False,
             "x": 0, "y": 0,
             "fixed":   {"x": True, "y": True},
@@ -1823,14 +1811,8 @@ def get_ip_topology_data(request):
         nodes.append({
             "id":        node_id,
             "label":     "\n".join(label_lines),
-            "shape":     "ellipse",
-            "size":      node_size,
-            "color": {
-                "border":     color,
-                "background": color + "33",
-                "highlight":  {"border": color, "background": color + "66"},
-            },
-            "font":       {"size": 11},
+            "shape":     "text",
+            "font":      {"size": 11, "color": color, "bold": True},
             "href":       p.get_absolute_url(),
             "title":      (
                 f"<b>{p.prefix}</b><br>"
@@ -2132,15 +2114,9 @@ def get_ip_topology_data(request):
                 color    = _hash_color(f"vlan_{site_key}")
                 nodes.append({
                     "id":      vlan_nid,
-                    "label":   f"VLAN {vlan.vid}\n{vlan.name or ''}",
-                    "shape":   "diamond",
-                    "size":    20,
-                    "color": {
-                        "border":     color,
-                        "background": color + "44",
-                        "highlight":  {"border": color, "background": color + "88"},
-                    },
-                    "font":    {"size": 10},
+                    "label":   f"VLAN {vlan.vid}" + (f" — {vlan.name}" if vlan.name else ""),
+                    "shape":   "text",
+                    "font":    {"size": 10, "color": color, "bold": True},
                     "href":    vlan.get_absolute_url(),
                     "title":   (
                         f"<b>VLAN {vlan.vid}</b><br>"
@@ -2437,14 +2413,8 @@ def get_site_topology_data(request):
             nodes.append({
                 "id":     rid,
                 "label":  region.name,
-                "shape":  "diamond",
-                "size":   44,
-                "color": {
-                    "border":     color,
-                    "background": color + "33",
-                    "highlight":  {"border": color, "background": color + "55"},
-                },
-                "font":    {"size": 14, "bold": True},
+                "shape":  "text",
+                "font":   {"size": 15, "bold": True, "color": color},
                 "href":    region.get_absolute_url(),
                 "title":   f"<b>{region.name}</b><br>Region",
                 "physics": True,
@@ -2493,14 +2463,8 @@ def get_site_topology_data(request):
         nodes.append({
             "id":    sid,
             "label": label,
-            "shape": "dot",
-            "size":  28,
-            "color": {
-                "border":     border,
-                "background": "#ffffff",
-                "highlight":  {"border": border, "background": "#f5f5f5"},
-            },
-            "font":  {"size": 12},
+            "shape": "text",
+            "font":  {"size": 12, "bold": True, "color": border},
             "href":  site.get_absolute_url(),
             "title": (
                 f"<b>{site.name}</b><br>"
@@ -2622,6 +2586,255 @@ class SiteTopologyView(PermissionRequiredMixin, View):
             "show_circuits":      request.GET.get('show_circuits', 'on'),
             "show_regions":       request.GET.get('show_regions', 'on'),
             "show_device_counts": request.GET.get('show_device_counts', ''),
+        })
+
+
+def get_l2_topology_data(request):
+    from ipam.models import VLAN, VLANGroup
+    from dcim.models import Site
+    from django.db.models import Q
+
+    site_id          = request.GET.get('site_id')       or None
+    vlan_group_id    = request.GET.get('vlan_group_id') or None
+    show_access      = request.GET.get('show_access',      'on') == 'on'
+    show_trunks      = request.GET.get('show_trunks',      'on') == 'on'
+    show_unconnected = request.GET.get('show_unconnected', '')   == 'on'
+
+    # ── VLANs ────────────────────────────────────────────────────────────
+    vlan_qs = VLAN.objects.select_related('site', 'group', 'tenant', 'role').order_by('vid')
+    if site_id:
+        vlan_qs = vlan_qs.filter(site_id=site_id)
+    if vlan_group_id:
+        vlan_qs = vlan_qs.filter(group_id=vlan_group_id)
+    vlans    = list(vlan_qs)
+    vlan_pks = {v.pk for v in vlans}
+    if not vlan_pks:
+        return {"nodes": [], "edges": [], "options": {}}
+
+    # ── Interfaces referencing these VLANs ────────────────────────────────
+    iface_qs = (
+        Interface.objects
+        .filter(Q(untagged_vlan_id__in=vlan_pks) | Q(tagged_vlans__in=vlan_pks))
+        .select_related('device__role', 'device__site', 'device__device_type', 'untagged_vlan')
+        .prefetch_related('tagged_vlans')
+        .distinct()
+    )
+    if site_id:
+        iface_qs = iface_qs.filter(device__site_id=site_id)
+    interfaces = list(iface_qs)
+
+    nodes      = []
+    edges      = []
+    edge_id    = 0
+    seen_edges = set()
+
+    # Determine which VLANs have at least one device
+    vlan_connected = set()
+    for iface in interfaces:
+        if iface.untagged_vlan_id in vlan_pks:
+            vlan_connected.add(iface.untagged_vlan_id)
+        for tv in iface.tagged_vlans.all():
+            if tv.pk in vlan_pks:
+                vlan_connected.add(tv.pk)
+
+    # ── VLAN nodes ────────────────────────────────────────────────────────
+    vlan_node_ids = {}
+    for vlan in vlans:
+        if not show_unconnected and vlan.pk not in vlan_connected:
+            continue
+        nid   = f"vlan_{vlan.pk}"
+        vlan_node_ids[vlan.pk] = nid
+        color = _hash_color(str(vlan.group_id or vlan.site_id or 'global'))
+        if vlan.status == 'reserved':
+            color = '#FF9800'
+        elif vlan.status == 'deprecated':
+            color = '#9E9E9E'
+        label = f"VLAN {vlan.vid}"
+        if vlan.name:
+            label += f" — {vlan.name}"
+        nodes.append({
+            "id":     nid,
+            "label":  label,
+            "shape":  "text",
+            "font":   {"size": 11, "bold": True, "color": color},
+            "href":         vlan.get_absolute_url(),
+            "title":        (
+                f"<b>VLAN {vlan.vid}</b> — {vlan.name or '(unnamed)'}<br>"
+                f"Status: {vlan.status}<br>"
+                f"Site: {vlan.site or 'Global'}<br>"
+                f"Group: {vlan.group or '—'}"
+            ),
+            "physics":      True,
+            "x": 0, "y": 0,
+            "is_vlan":      True,
+            "vid":          vlan.vid,
+        })
+
+    # ── Device nodes + membership edges ───────────────────────────────────
+    device_node_ids = {}
+    trunk_iface_pks = set()
+
+    for iface in interfaces:
+        device = iface.device
+        if device.pk not in device_node_ids:
+            dev_id     = f"dev_{device.pk}"
+            role_color = "#" + (device.role.color if device.role and device.role.color else "6c757d")
+            dev_image  = find_image_url(device.role.slug if device.role else "role-unknown")
+            node = {
+                "id":      dev_id,
+                "label":   device.name or f"Device {device.pk}",
+                "shape":   "image",
+                "image":   dev_image,
+                "size":    22,
+                "color":   {"border": role_color},
+                "font":    {"size": 11},
+                "href":    device.get_absolute_url(),
+                "title":   (
+                    f"<b>{device.name}</b><br>"
+                    f"Site: {device.site}<br>"
+                    f"Role: {device.role}"
+                ),
+                "physics":   True,
+                "x": 0, "y": 0,
+                "is_device": True,
+            }
+            nodes.append(node)
+            device_node_ids[device.pk] = dev_id
+
+        dev_nid = device_node_ids[device.pk]
+
+        # Access edge
+        if show_access and iface.untagged_vlan_id in vlan_node_ids:
+            vlan_nid  = vlan_node_ids[iface.untagged_vlan_id]
+            ekey = (dev_nid, vlan_nid, 'access')
+            if ekey not in seen_edges:
+                seen_edges.add(ekey)
+                edge_id += 1
+                edges.append({
+                    "id":       edge_id,
+                    "from":     dev_nid,
+                    "to":       vlan_nid,
+                    "length":   120,
+                    "color":    {"color": "#4CAF50", "opacity": 0.65},
+                    "width":    1,
+                    "smooth":   {"type": "dynamic"},
+                    "title":    f"Access: {iface.name} → VLAN {iface.untagged_vlan.vid}",
+                    "is_access": True,
+                })
+
+        # Tagged edges
+        if show_trunks:
+            for tv in iface.tagged_vlans.all():
+                if tv.pk not in vlan_node_ids:
+                    continue
+                vlan_nid = vlan_node_ids[tv.pk]
+                ekey = (dev_nid, vlan_nid, 'tagged')
+                if ekey not in seen_edges:
+                    seen_edges.add(ekey)
+                    edge_id += 1
+                    edges.append({
+                        "id":      edge_id,
+                        "from":    dev_nid,
+                        "to":      vlan_nid,
+                        "length":  150,
+                        "color":   {"color": "#1565C0", "opacity": 0.55},
+                        "width":   2,
+                        "dashes":  [4, 3],
+                        "smooth":  {"type": "dynamic"},
+                        "title":   f"Tagged: {iface.name} → VLAN {tv.vid}",
+                        "is_tagged": True,
+                    })
+            if iface.mode in ('tagged', 'tagged-all'):
+                trunk_iface_pks.add(iface.pk)
+
+    # ── Physical trunk cable edges ─────────────────────────────────────────
+    if show_trunks and trunk_iface_pks:
+        try:
+            iface_ct = ContentType.objects.get_for_model(Interface)
+            terms = (
+                CableTermination.objects
+                .filter(termination_type=iface_ct, termination_id__in=trunk_iface_pks)
+                .select_related('cable')
+            )
+            by_cable = {}
+            for t in terms:
+                if t.cable_id:
+                    by_cable.setdefault(t.cable_id, []).append(t.termination_id)
+
+            iface_to_device = {iface.pk: iface.device_id for iface in interfaces}
+            for cable_id, iface_ids in by_cable.items():
+                if len(iface_ids) < 2:
+                    continue
+                dev_a = iface_to_device.get(iface_ids[0])
+                dev_b = iface_to_device.get(iface_ids[1])
+                if not dev_a or not dev_b or dev_a == dev_b:
+                    continue
+                if dev_a not in device_node_ids or dev_b not in device_node_ids:
+                    continue
+                pair = tuple(sorted([dev_a, dev_b]))
+                if pair in seen_edges:
+                    continue
+                seen_edges.add(pair)
+                edge_id += 1
+                edges.append({
+                    "id":           edge_id,
+                    "from":         device_node_ids[dev_a],
+                    "to":           device_node_ids[dev_b],
+                    "length":       80,
+                    "color":        {"color": "#FF6F00", "opacity": 0.85},
+                    "width":        3,
+                    "smooth":       {"type": "dynamic"},
+                    "title":        "Physical trunk cable",
+                    "is_trunk_link": True,
+                })
+        except Exception:
+            import traceback; traceback.print_exc()
+
+    return {
+        "nodes": nodes,
+        "edges": edges,
+        "options": {
+            "show_access":      show_access,
+            "show_trunks":      show_trunks,
+            "show_unconnected": show_unconnected,
+        },
+    }
+
+
+class L2TopologyView(PermissionRequiredMixin, View):
+    """Layer-2 topology derived from VLAN membership and trunk port relationships."""
+
+    permission_required = ("dcim.view_device", "ipam.view_vlan")
+
+    def get(self, request):
+        from ipam.models import VLANGroup
+        from dcim.models import Site
+
+        topo_data  = None
+        topo_error = None
+        if request.GET:
+            try:
+                topo_data = get_l2_topology_data(request)
+            except Exception:
+                import traceback
+                topo_error = traceback.format_exc()
+                traceback.print_exc()
+
+        sites       = Site.objects.all().order_by('name')
+        vlan_groups = VLANGroup.objects.all().order_by('name')
+
+        return render(request, "netbox_topology_views/l2_topology.html", {
+            "topology_data":      json.dumps(topo_data),
+            "topo_error":         topo_error,
+            "broken_image":       find_image_url("role-unknown"),
+            "basepath":           settings.BASE_PATH,
+            "sites":              sites,
+            "vlan_groups":        vlan_groups,
+            "selected_site":      request.GET.get('site_id', ''),
+            "selected_vlan_group":request.GET.get('vlan_group_id', ''),
+            "show_access":        request.GET.get('show_access',      'on'),
+            "show_trunks":        request.GET.get('show_trunks',      'on'),
+            "show_unconnected":   request.GET.get('show_unconnected', ''),
         })
 
 

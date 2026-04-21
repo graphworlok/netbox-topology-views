@@ -2,20 +2,20 @@
 {% load static %}
 {% load helpers %}
 
-{% block title %}Site / Region Topology{% endblock %}
+{% block title %}L2 / VLAN Domain Topology{% endblock %}
 
 {% block head %}
 <link rel="stylesheet" href="{% static 'netbox_topology_views/css/vendor.css' %}">
 <link rel="stylesheet" href="{% static 'netbox_topology_views/css/app.css' %}">
 <style>
   /* ── Graph canvas ────────────────────────────────── */
-  #sitegraph {
+  #l2graph {
     width: 100%;
     position: relative;
   }
 
   /* ── Stats badge (top-right of graph) ────────────── */
-  .site-stats-badge {
+  .l2-stats-badge {
     position: absolute;
     top: 10px;
     right: 12px;
@@ -27,6 +27,32 @@
     color: #fff;
     pointer-events: none;
   }
+
+  /* ── Edge-type legend (bottom-right of graph) ───── */
+  .l2-edge-legend {
+    position: absolute;
+    bottom: 16px;
+    right: 16px;
+    z-index: 10;
+    padding: 10px 14px;
+    font-size: 12px;
+    min-width: 170px;
+    pointer-events: auto;
+    box-shadow: 0 2px 8px rgba(0,0,0,.2);
+  }
+
+  .l2-legend-title {
+    font-weight: 600;
+    margin-bottom: 7px;
+  }
+
+  .l2-legend-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 5px;
+    font-size: 12px;
+  }
 </style>
 {% endblock %}
 
@@ -36,20 +62,20 @@
 
     {# ── Filter form (GET) ── #}
     <form method="get" class="d-flex align-items-center gap-2 flex-wrap">
-      <select name="region_id" class="form-select form-select-sm" style="max-width:200px">
-        <option value="">All Regions</option>
-        {% for r in regions %}
-          <option value="{{ r.pk }}"{% if selected_region == r.pk|stringformat:'s' %} selected{% endif %}>
-            {{ r.name }}
+      <select name="site_id" class="form-select form-select-sm" style="max-width:200px">
+        <option value="">All Sites</option>
+        {% for site in sites %}
+          <option value="{{ site.pk }}"{% if selected_site == site.pk|stringformat:'s' %} selected{% endif %}>
+            {{ site.name }}
           </option>
         {% endfor %}
       </select>
 
-      <select name="tenant_id" class="form-select form-select-sm" style="max-width:200px">
-        <option value="">All Tenants</option>
-        {% for t in tenants %}
-          <option value="{{ t.pk }}"{% if selected_tenant == t.pk|stringformat:'s' %} selected{% endif %}>
-            {{ t.name }}
+      <select name="vlan_group_id" class="form-select form-select-sm" style="max-width:200px">
+        <option value="">All VLAN Groups</option>
+        {% for g in vlan_groups %}
+          <option value="{{ g.pk }}"{% if selected_vlan_group == g.pk|stringformat:'s' %} selected{% endif %}>
+            {{ g.name }}
           </option>
         {% endfor %}
       </select>
@@ -58,26 +84,26 @@
         <button type="button" class="btn btn-sm btn-secondary dropdown-toggle" data-bs-toggle="dropdown">
           <i class="mdi mdi-tune"></i> Options
         </button>
-        <ul class="dropdown-menu p-2" style="min-width:240px">
+        <ul class="dropdown-menu p-2" style="min-width:260px">
           <li>
             <div class="form-check">
-              <input class="form-check-input" type="checkbox" name="show_circuits" id="opt_circuits"
-                     value="on" {% if show_circuits == 'on' %}checked{% endif %}>
-              <label class="form-check-label" for="opt_circuits">Show circuits</label>
+              <input class="form-check-input" type="checkbox" name="show_access" id="opt_show_access"
+                     value="on" {% if show_access == 'on' %}checked{% endif %}>
+              <label class="form-check-label" for="opt_show_access">Show access port membership</label>
             </div>
           </li>
           <li>
             <div class="form-check">
-              <input class="form-check-input" type="checkbox" name="show_regions" id="opt_regions"
-                     value="on" {% if show_regions == 'on' %}checked{% endif %}>
-              <label class="form-check-label" for="opt_regions">Show region nodes</label>
+              <input class="form-check-input" type="checkbox" name="show_trunks" id="opt_show_trunks"
+                     value="on" {% if show_trunks == 'on' %}checked{% endif %}>
+              <label class="form-check-label" for="opt_show_trunks">Show trunk port membership &amp; cables</label>
             </div>
           </li>
           <li>
             <div class="form-check">
-              <input class="form-check-input" type="checkbox" name="show_device_counts" id="opt_device_counts"
-                     value="on" {% if show_device_counts == 'on' %}checked{% endif %}>
-              <label class="form-check-label" for="opt_device_counts">Show device counts on sites</label>
+              <input class="form-check-input" type="checkbox" name="show_unconnected" id="opt_show_unconnected"
+                     value="on" {% if show_unconnected == 'on' %}checked{% endif %}>
+              <label class="form-check-label" for="opt_show_unconnected">Show VLANs with no devices</label>
             </div>
           </li>
           <li class="mt-2">
@@ -92,17 +118,16 @@
     </form>
 
     {# ── Graph controls ── #}
-    <button type="button" class="btn btn-secondary btn-sm" id="btnSiteFit"
-            onclick="window.fitSiteGraph()" title="Fit graph to screen">
+    <button type="button" class="btn btn-secondary btn-sm" onclick="window.fitL2Graph()" title="Fit graph to screen">
       <i class="mdi mdi-fit-to-screen"></i> Fit
     </button>
 
-    <a href="{% url 'plugins:netbox_topology_views:ip_topology' %}" class="btn btn-secondary btn-sm">
-      <i class="mdi mdi-ip-network-outline"></i> IP / Routing Topology
+    <a href="{% url 'plugins:netbox_topology_views:site_topology' %}" class="btn btn-secondary btn-sm">
+      <i class="mdi mdi-earth"></i> Site / Region Topology
     </a>
 
-    <a href="{% url 'plugins:netbox_topology_views:l2_topology' %}" class="btn btn-secondary btn-sm">
-      <i class="mdi mdi-lan"></i> L2 / VLAN Topology
+    <a href="{% url 'plugins:netbox_topology_views:ip_topology' %}" class="btn btn-secondary btn-sm">
+      <i class="mdi mdi-ip-network-outline"></i> IP / Routing Topology
     </a>
 
     <a href="{% url 'plugins:netbox_topology_views:home' %}" class="btn btn-secondary btn-sm">
@@ -118,18 +143,18 @@
   <div class="tab-pane show active" role="tabpanel">
     {% if topo_error %}
       <div class="alert alert-danger mt-3">
-        <strong><i class="mdi mdi-alert-circle-outline"></i> Error building site topology:</strong>
+        <strong><i class="mdi mdi-alert-circle-outline"></i> Error building L2 topology:</strong>
         <pre class="mt-2 mb-0" style="font-size:11px;white-space:pre-wrap">{{ topo_error }}</pre>
       </div>
     {% elif not topology_data or topology_data == 'null' %}
       <div class="alert alert-info mt-3">
         <i class="mdi mdi-information-outline"></i>
-        Select filters above and click <strong>Draw</strong> to render the site / region topology,
-        or leave filters blank to show all sites.
+        Select filters above and click <strong>Draw</strong> to render the L2 / VLAN domain topology,
+        or leave filters blank to show all VLAN-connected devices.
       </div>
     {% else %}
       <div class="panel-body">
-        <div id="sitegraph"></div>
+        <div id="l2graph"></div>
       </div>
     {% endif %}
   </div>
@@ -138,13 +163,12 @@
 
 {% block javascript %}
 <script>
-  const siteTopologyData = {{ topology_data|safe }};
-
+  const brokenImage    = '{{ broken_image }}';
+  const l2TopologyData = {{ topology_data|safe }};
   window.addEventListener('resize', resizeCanvas);
   requestAnimationFrame(resizeCanvas);
-
   function resizeCanvas() {
-    const el = document.getElementById('sitegraph');
+    const el = document.getElementById('l2graph');
     if (!el) return;
     const footer = document.querySelector('.footer');
     const footerH = footer ? footer.offsetHeight + 8 : 16;
@@ -152,5 +176,5 @@
     el.style.height = Math.max(300, window.innerHeight - top - footerH) + 'px';
   }
 </script>
-<script src="{% static 'netbox_topology_views/js/site_topology.js' %}" defer></script>
+<script src="{% static 'netbox_topology_views/js/l2_topology.js' %}" defer></script>
 {% endblock javascript %}

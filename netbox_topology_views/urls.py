@@ -10,6 +10,7 @@ urlpatterns = (
     path("topology/", views.TopologyHomeView.as_view(), name="home"),
     path("ip-topology/", views.IPTopologyView.as_view(), name="ip_topology"),
     path("site-topology/", views.SiteTopologyView.as_view(), name="site_topology"),
+    path("l2-topology/", views.L2TopologyView.as_view(), name="l2_topology"),
     path("alert-status/", views.AlertStatusView.as_view(), name="alert_status"),
     path("metrics/", views.MetricsView.as_view(), name="metrics"),
     path("vulnerabilities/", views.VulnerabilityView.as_view(), name="vulnerabilities"),

@@ -17,7 +17,8 @@ async function bundleScripts() {
         app: 'js/home.js',
         images: 'js/images.js',
         ip_topology: 'js/ip_topology.js',
-        site_topology: 'js/site_topology.js'
+        site_topology: 'js/site_topology.js',
+        l2_topology: 'js/l2_topology.js'
     }
 
     try {
