@@ -3235,12 +3235,12 @@ def _build_geo_global_data(request):
     seen_edges = set()
     terminations = (
         CircuitTermination.objects
-        .filter(site_id__in=site_id_set)
-        .select_related('circuit', 'site')
+        .filter(_site_id__in=site_id_set)
+        .select_related('circuit')
     )
     site_by_circuit: Dict[int, list] = {}
     for t in terminations:
-        site_by_circuit.setdefault(t.circuit_id, []).append(t.site_id)
+        site_by_circuit.setdefault(t.circuit_id, []).append(t._site_id)
 
     for cid, site_ids in site_by_circuit.items():
         if len(site_ids) == 2:
