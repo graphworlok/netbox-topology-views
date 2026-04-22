@@ -53,6 +53,10 @@ urlpatterns = (
     path("powerfeedcoordinate/<int:pk>/delete/", views.PowerFeedCoordinateDeleteView.as_view(), name="powerfeedcoordinate_delete"),
     path("powerfeedcoordinate/<int:pk>/changelog/", ObjectChangeLogView.as_view(), name="powerfeedcoordinate_changelog", kwargs={'model': models.PowerFeedCoordinate}),
 
+    # Geographic views
+    path("geo-global/", views.GeoGlobalView.as_view(), name="geo_global"),
+    path("geo/site/<int:site_id>/", views.GeoSiteView.as_view(), name="geo_site"),
+
     # Coordinate
     path("coordinate/", views.CoordinateListView.as_view(), name="coordinate_list"),
     path("coordinate/add/", views.CoordinateAddView.as_view(), name="coordinate_add"),

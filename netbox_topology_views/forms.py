@@ -397,17 +397,17 @@ class DeviceFilterForm(
 
 class CoordinateGroupsForm(NetBoxModelForm):
     fieldsets = (
-        FieldSet('name', 'description', name=_("Group Details")),
+        FieldSet('name', 'description', 'background_image_url', name=_("Group Details")),
     )
 
     class Meta:
         model = CoordinateGroup
-        fields = ('name', 'description')
+        fields = ('name', 'description', 'background_image_url')
 
 class CoordinateGroupsImportForm(NetBoxModelImportForm):
     class Meta:
         model = CoordinateGroup
-        fields = ('name', 'description')
+        fields = ('name', 'description', 'background_image_url')
 
 class CircuitCoordinatesForm(NetBoxModelForm):
     fieldsets = (

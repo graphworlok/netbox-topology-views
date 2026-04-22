@@ -1,0 +1,79 @@
+{% extends 'generic/_base.html' %}
+{% load static %}
+
+{% block title %}Global Geographic Map{% endblock %}
+
+{% block head %}
+<style>
+  #geo-canvas {
+    width: 100%;
+    background: #1a2a3a;
+    border-radius: 4px;
+  }
+  .geo-toolbar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 0;
+    flex-wrap: wrap;
+  }
+  .geo-legend {
+    position: absolute;
+    bottom: 16px;
+    right: 16px;
+    z-index: 10;
+    padding: 8px 12px;
+    font-size: 12px;
+    background: rgba(0,0,0,0.7);
+    color: #ccc;
+    border-radius: 4px;
+    pointer-events: none;
+  }
+  .geo-wrapper {
+    position: relative;
+  }
+</style>
+{% endblock %}
+
+{% block controls %}
+<div class="controls">
+  <div class="control-group">
+    <a href="{% url 'dcim:site_list' %}" class="btn btn-secondary btn-sm">
+      <i class="mdi mdi-format-list-bulleted"></i> All Sites
+    </a>
+    <button type="button" class="btn btn-secondary btn-sm" onclick="window._geoNetwork && window._geoNetwork.fit({animation:true})">
+      <i class="mdi mdi-fit-to-screen"></i> Fit
+    </button>
+  </div>
+</div>
+{% endblock %}
+
+{% block content %}
+<div class="geo-wrapper">
+  <div id="geo-canvas"></div>
+  <div class="geo-legend">
+    <i class="mdi mdi-map-marker"></i> Click a site to view its device layout
+  </div>
+</div>
+{% endblock %}
+
+{% block javascript %}
+<script>
+  window.GEO_DATA = {{ geo_data|safe }};
+  window.GEO_SITE_BASE_URL = "/" + "{{ settings.BASE_PATH }}" + "plugins/netbox_topology_views/geo/site/";
+  window.WORLD_MAP_URL = "{% static 'netbox_topology_views/img/world_map.svg' %}";
+
+  window.addEventListener('resize', resizeCanvas);
+  resizeCanvas();
+
+  function resizeCanvas() {
+    const h = window.innerHeight
+      - (document.querySelector('.page-header') ? document.querySelector('.page-header').offsetHeight : 0)
+      - (document.querySelector('.footer')      ? document.querySelector('.footer').offsetHeight      : 0)
+      - 60;
+    document.getElementById('geo-canvas').style.height = Math.max(h, 400) + 'px';
+  }
+</script>
+<script src="{% static 'netbox_topology_views/js/vis-network.min.js' %}"></script>
+<script src="{% static 'netbox_topology_views/js/geo_global.js' %}"></script>
+{% endblock %}

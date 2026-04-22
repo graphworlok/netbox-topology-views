@@ -1,0 +1,96 @@
+{% extends 'generic/_base.html' %}
+{% load static %}
+
+{% block title %}Site Layout: {{ site_name }}{% endblock %}
+
+{% block head %}
+<style>
+  #geo-canvas {
+    width: 100%;
+    background: #1a2a3a;
+    border-radius: 4px;
+  }
+  .geo-wrapper {
+    position: relative;
+  }
+  .geo-legend {
+    position: absolute;
+    bottom: 16px;
+    right: 16px;
+    z-index: 10;
+    padding: 8px 12px;
+    font-size: 12px;
+    background: rgba(0,0,0,0.7);
+    color: #ccc;
+    border-radius: 4px;
+    pointer-events: none;
+  }
+</style>
+{% endblock %}
+
+{% block controls %}
+<div class="controls">
+  <div class="control-group">
+    <a href="{% url 'plugins:netbox_topology_views:geo_global' %}" class="btn btn-secondary btn-sm">
+      <i class="mdi mdi-earth"></i> Global Map
+    </a>
+    <button type="button" class="btn btn-secondary btn-sm" onclick="window._geoSiteNetwork && window._geoSiteNetwork.fit({animation:true})">
+      <i class="mdi mdi-fit-to-screen"></i> Fit
+    </button>
+
+    {% if groups %}
+    <div class="btn-group">
+      <button type="button" class="btn btn-secondary btn-sm dropdown-toggle" data-bs-toggle="dropdown">
+        <i class="mdi mdi-layers"></i>
+        {% if selected_group_id %}
+          {% for g in groups %}{% if g.id == selected_group_id %}{{ g.name }}{% endif %}{% endfor %}
+        {% else %}
+          Coordinate Group
+        {% endif %}
+      </button>
+      <ul class="dropdown-menu">
+        <li><a class="dropdown-item" href="?">— No group —</a></li>
+        {% for g in groups %}
+        <li>
+          <a class="dropdown-item {% if g.id == selected_group_id %}active{% endif %}"
+             href="?group={{ g.id }}">{{ g.name }}</a>
+        </li>
+        {% endfor %}
+      </ul>
+    </div>
+    {% endif %}
+  </div>
+</div>
+{% endblock %}
+
+{% block content %}
+<div class="geo-wrapper">
+  <div id="geo-canvas"></div>
+  <div class="geo-legend">
+    <i class="mdi mdi-drag"></i> Drag nodes to position &nbsp;|&nbsp;
+    <i class="mdi mdi-open-in-new"></i> Double-click to open device
+  </div>
+</div>
+{% endblock %}
+
+{% block javascript %}
+<script>
+  window.GEO_DATA = {{ geo_data|safe }};
+  window.GROUP_ID = {{ selected_group_id|default:"null" }};
+  window.SAVE_COORDS = {% if settings.PLUGINS_CONFIG.netbox_topology_views.allow_coordinates_saving %}true{% else %}false{% endif %};
+  window.SAVE_COORDS_URL = "/" + "{{ settings.BASE_PATH }}" + "api/plugins/netbox_topology_views/save-coords/save_coords/";
+
+  window.addEventListener('resize', resizeCanvas);
+  resizeCanvas();
+
+  function resizeCanvas() {
+    const h = window.innerHeight
+      - (document.querySelector('.page-header') ? document.querySelector('.page-header').offsetHeight : 0)
+      - (document.querySelector('.footer')      ? document.querySelector('.footer').offsetHeight      : 0)
+      - 60;
+    document.getElementById('geo-canvas').style.height = Math.max(h, 400) + 'px';
+  }
+</script>
+<script src="{% static 'netbox_topology_views/js/vis-network.min.js' %}"></script>
+<script src="{% static 'netbox_topology_views/js/geo_site.js' %}"></script>
+{% endblock %}

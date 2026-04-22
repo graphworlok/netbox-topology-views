@@ -111,7 +111,13 @@ class CoordinateGroup(NetBoxModel):
 
     description = models.CharField(
         max_length=255,
-        blank = True,
+        blank=True,
+    )
+
+    background_image_url = models.CharField(
+        max_length=500,
+        blank=True,
+        help_text='URL of a background image to display behind the topology canvas (e.g. a floor-plan or site map).',
     )
 
     _netbox_private = True

@@ -1,0 +1,116 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1800 900" width="1800" height="900">
+  <defs>
+    <style>
+      .ocean { fill: #1a2a3a; }
+      .grid  { stroke: #2a4a6a; stroke-width: 0.5; fill: none; }
+      .eq    { stroke: #3a6a9a; stroke-width: 1; fill: none; }
+      .tropic{ stroke: #2a5a4a; stroke-width: 0.7; fill: none; stroke-dasharray: 4,4; }
+      .label { font: 9px sans-serif; fill: #4a7a9a; }
+    </style>
+  </defs>
+
+  <!-- Ocean background -->
+  <rect class="ocean" width="1800" height="900"/>
+
+  <!-- Longitude lines every 30° -->
+  <line class="grid" x1="150"  y1="0" x2="150"  y2="900"/>
+  <line class="grid" x1="300"  y1="0" x2="300"  y2="900"/>
+  <line class="grid" x1="450"  y1="0" x2="450"  y2="900"/>
+  <line class="grid" x1="600"  y1="0" x2="600"  y2="900"/>
+  <line class="grid" x1="750"  y1="0" x2="750"  y2="900"/>
+  <line class="eq"   x1="900"  y1="0" x2="900"  y2="900"/>  <!-- Prime meridian -->
+  <line class="grid" x1="1050" y1="0" x2="1050" y2="900"/>
+  <line class="grid" x1="1200" y1="0" x2="1200" y2="900"/>
+  <line class="grid" x1="1350" y1="0" x2="1350" y2="900"/>
+  <line class="grid" x1="1500" y1="0" x2="1500" y2="900"/>
+  <line class="grid" x1="1650" y1="0" x2="1650" y2="900"/>
+
+  <!-- Latitude lines every 30° -->
+  <line class="grid" x1="0" y1="150" x2="1800" y2="150"/>
+  <line class="tropic" x1="0" y1="225" x2="1800" y2="225"/>  <!-- ~Tropic of Cancer 23.5° -->
+  <line class="eq"   x1="0" y1="450" x2="1800" y2="450"/>    <!-- Equator -->
+  <line class="tropic" x1="0" y1="675" x2="1800" y2="675"/>  <!-- ~Tropic of Capricorn -->
+  <line class="grid" x1="0" y1="750" x2="1800" y2="750"/>
+
+  <!-- Longitude labels -->
+  <text class="label" x="152" y="460">-150°</text>
+  <text class="label" x="302" y="460">-120°</text>
+  <text class="label" x="452" y="460">-90°</text>
+  <text class="label" x="602" y="460">-60°</text>
+  <text class="label" x="752" y="460">-30°</text>
+  <text class="label" x="902" y="460">0°</text>
+  <text class="label" x="1052" y="460">30°</text>
+  <text class="label" x="1202" y="460">60°</text>
+  <text class="label" x="1352" y="460">90°</text>
+  <text class="label" x="1502" y="460">120°</text>
+  <text class="label" x="1652" y="460">150°</text>
+
+  <!-- Latitude labels -->
+  <text class="label" x="4" y="155">60°N</text>
+  <text class="label" x="4" y="230">23°N</text>
+  <text class="label" x="4" y="455">0°</text>
+  <text class="label" x="4" y="680">23°S</text>
+  <text class="label" x="4" y="755">60°S</text>
+
+  <!-- Very rough continent outlines (simplified polygons) -->
+  <!-- North America -->
+  <polygon style="fill:#1e3a2a;stroke:#2a5a3a;stroke-width:0.8"
+    points="200,180 250,160 330,155 380,165 400,185 430,195 460,210 480,240
+            490,270 480,300 460,320 440,340 420,380 400,420 380,450
+            360,440 340,420 310,400 280,380 250,360 230,330 210,300
+            195,270 190,240 195,210"/>
+  <!-- Central America -->
+  <polygon style="fill:#1e3a2a;stroke:#2a5a3a;stroke-width:0.8"
+    points="380,450 400,420 420,440 430,460 420,480 400,490 385,470"/>
+  <!-- South America -->
+  <polygon style="fill:#1e3a2a;stroke:#2a5a3a;stroke-width:0.8"
+    points="400,490 430,480 470,470 510,470 540,480 560,510 565,550
+            560,600 540,650 510,700 480,730 450,720 420,680 400,640
+            385,590 380,540 385,510"/>
+  <!-- Europe -->
+  <polygon style="fill:#1e3a2a;stroke:#2a5a3a;stroke-width:0.8"
+    points="860,160 880,155 910,158 930,165 950,170 960,180 955,200
+            940,215 920,220 900,225 880,220 865,210 855,195 855,178"/>
+  <!-- Scandinavia (rough) -->
+  <polygon style="fill:#1e3a2a;stroke:#2a5a3a;stroke-width:0.8"
+    points="880,130 900,120 920,125 935,140 930,160 910,158 895,150"/>
+  <!-- UK (rough) -->
+  <polygon style="fill:#1e3a2a;stroke:#2a5a3a;stroke-width:0.8"
+    points="845,165 855,158 860,168 855,178 845,175"/>
+  <!-- Africa -->
+  <polygon style="fill:#1e3a2a;stroke:#2a5a3a;stroke-width:0.8"
+    points="880,260 910,245 950,240 990,250 1020,270 1040,310 1040,370
+            1030,440 1010,500 990,550 960,600 930,630 910,640 890,630
+            865,590 845,540 840,480 845,420 855,360 860,300 870,270"/>
+  <!-- Asia (very rough) -->
+  <polygon style="fill:#1e3a2a;stroke:#2a5a3a;stroke-width:0.8"
+    points="960,170 1010,155 1080,145 1160,140 1240,145 1310,155
+            1370,165 1420,175 1460,185 1490,200 1500,220 1490,245
+            1460,270 1430,285 1400,290 1360,280 1320,265 1280,260
+            1240,270 1210,290 1190,310 1170,330 1150,310 1120,290
+            1090,275 1060,265 1030,260 1010,250 990,235 970,215 960,195"/>
+  <!-- Middle East -->
+  <polygon style="fill:#1e3a2a;stroke:#2a5a3a;stroke-width:0.8"
+    points="990,235 1030,240 1060,255 1080,275 1070,300 1040,310 1010,300 990,280 985,260"/>
+  <!-- Indian Subcontinent -->
+  <polygon style="fill:#1e3a2a;stroke:#2a5a3a;stroke-width:0.8"
+    points="1130,265 1160,258 1190,270 1200,300 1195,340 1175,375
+            1155,390 1135,375 1120,340 1115,305 1120,280"/>
+  <!-- Southeast Asia + Indochina -->
+  <polygon style="fill:#1e3a2a;stroke:#2a5a3a;stroke-width:0.8"
+    points="1240,265 1270,260 1300,265 1330,280 1350,295 1340,320
+            1310,340 1280,345 1255,330 1240,310 1240,290"/>
+  <!-- Japan (rough) -->
+  <polygon style="fill:#1e3a2a;stroke:#2a5a3a;stroke-width:0.8"
+    points="1440,185 1455,178 1465,185 1460,200 1448,205 1440,198"/>
+  <!-- Australia -->
+  <polygon style="fill:#1e3a2a;stroke:#2a5a3a;stroke-width:0.8"
+    points="1340,520 1390,505 1440,510 1490,530 1520,560 1530,600
+            1510,640 1480,660 1440,665 1400,650 1360,620 1335,580 1330,545"/>
+  <!-- New Zealand (rough) -->
+  <polygon style="fill:#1e3a2a;stroke:#2a5a3a;stroke-width:0.8"
+    points="1555,640 1565,630 1572,640 1565,655 1555,650"/>
+  <!-- Greenland -->
+  <polygon style="fill:#1e3a2a;stroke:#2a5a3a;stroke-width:0.8"
+    points="630,120 665,110 700,115 720,130 715,155 690,165 660,160 635,148"/>
+</svg>

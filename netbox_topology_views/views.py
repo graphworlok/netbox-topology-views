@@ -3174,3 +3174,195 @@ class TopologyIndividualOptionsView(PermissionRequiredMixin, View):
                 "object": queryset,
             },
         )
+
+
+# ---------------------------------------------------------------------------
+# Geographic views
+# ---------------------------------------------------------------------------
+
+def _build_geo_global_data(request):
+    """Return JSON-serialisable data for the global geographic map view.
+
+    Each site that has both latitude and longitude set becomes a node.
+    Sites within the same region are given a shared group colour.
+    Circuits whose both terminations resolve to a site create edges.
+    """
+    from dcim.models import Site
+
+    sites = (
+        Site.objects
+        .restrict(request.user, 'view')
+        .exclude(latitude=None)
+        .exclude(longitude=None)
+        .select_related('region')
+    )
+
+    # Map region → colour index for stable colouring
+    region_ids = list({s.region_id for s in sites if s.region_id})
+    region_color_map = {rid: i for i, rid in enumerate(sorted(region_ids))}
+    COLORS = [
+        '#4e79a7', '#f28e2b', '#e15759', '#76b7b2', '#59a14f',
+        '#edc948', '#b07aa1', '#ff9da7', '#9c755f', '#bab0ac',
+    ]
+
+    nodes = []
+    site_id_set = set()
+    for site in sites:
+        # Equirectangular projection centred at (0, 0)
+        # Canvas width = 1800, height = 900 (arbitrary scale; vis-network zooms freely)
+        x = (float(site.longitude) / 180.0) * 900
+        y = -(float(site.latitude) / 90.0) * 450
+
+        color_idx = region_color_map.get(site.region_id, len(COLORS) - 1) % len(COLORS)
+        nodes.append({
+            'id': site.pk,
+            'label': site.name,
+            'title': f"{site.name}\n{site.physical_address or ''}".strip(),
+            'x': round(x, 1),
+            'y': round(y, 1),
+            'fixed': True,
+            'color': COLORS[color_idx],
+            'font': {'color': '#ffffff', 'size': 11},
+            'shape': 'dot',
+            'size': 12,
+            'url': f'/dcim/sites/{site.slug}/',
+            'site_id': site.pk,
+        })
+        site_id_set.add(site.pk)
+
+    # Edges: circuits between two sites
+    edges = []
+    seen_edges = set()
+    terminations = (
+        CircuitTermination.objects
+        .filter(site_id__in=site_id_set)
+        .select_related('circuit', 'site')
+    )
+    site_by_circuit: Dict[int, list] = {}
+    for t in terminations:
+        site_by_circuit.setdefault(t.circuit_id, []).append(t.site_id)
+
+    for cid, site_ids in site_by_circuit.items():
+        if len(site_ids) == 2:
+            a, b = sorted(site_ids)
+            key = (a, b)
+            if key not in seen_edges:
+                seen_edges.add(key)
+                edges.append({'from': a, 'to': b})
+
+    return {'nodes': nodes, 'edges': edges}
+
+
+def _build_geo_site_data(request, site_id, group_id=None):
+    """Return JSON-serialisable data for the per-site geographic view.
+
+    Devices in the given site become nodes. Existing Coordinate records for
+    the selected group provide x/y positions; unpositioned devices cluster at (0,0).
+    """
+    from dcim.models import Site
+
+    site = get_object_or_404(Site, pk=site_id)
+
+    devices = (
+        Device.objects
+        .restrict(request.user, 'view')
+        .filter(site=site)
+        .select_related('device_type', 'role', 'primary_ip4', 'primary_ip6')
+    )
+
+    # Load saved coordinates for this group
+    coord_map: Dict[int, tuple] = {}
+    selected_group = None
+    if group_id:
+        try:
+            selected_group = CoordinateGroup.objects.get(pk=group_id)
+            for c in Coordinate.objects.filter(group=selected_group, device__site=site):
+                coord_map[c.device_id] = (c.x, c.y)
+        except CoordinateGroup.DoesNotExist:
+            pass
+
+    nodes = []
+    for device in devices:
+        x, y = coord_map.get(device.pk, (0, 0))
+        ip = ''
+        if device.primary_ip4:
+            ip = str(device.primary_ip4.address.ip)
+        elif device.primary_ip6:
+            ip = str(device.primary_ip6.address.ip)
+        nodes.append({
+            'id': device.pk,
+            'label': device.name or f'Device #{device.pk}',
+            'title': f"{device.name}\n{device.device_type}\n{ip}".strip(),
+            'x': x,
+            'y': y,
+            'fixed': bool(coord_map.get(device.pk)),
+            'color': '#4e79a7',
+            'font': {'color': '#ffffff', 'size': 11},
+            'shape': 'dot',
+            'size': 10,
+            'url': f'/dcim/devices/{device.pk}/',
+        })
+
+    # Edges: cables between devices in this site
+    edges = []
+    device_ids = {n['id'] for n in nodes}
+    seen_edges = set()
+    # CableTermination stores device id in _device_id (generic termination pattern)
+    terminations = CableTermination.objects.filter(
+        _device_id__in=device_ids
+    )
+    cable_ends: Dict[int, list] = {}
+    for t in terminations:
+        cable_ends.setdefault(t.cable_id, []).append(t._device_id)
+    for cable_id, dev_ids in cable_ends.items():
+        unique_devs = list(set(d for d in dev_ids if d in device_ids))
+        if len(unique_devs) == 2:
+            a, b = sorted(unique_devs)
+            key = (a, b)
+            if key not in seen_edges:
+                seen_edges.add(key)
+                edges.append({'from': a, 'to': b})
+
+    # Coordinate groups for the selector
+    groups = list(CoordinateGroup.objects.values('id', 'name', 'background_image_url'))
+
+    return {
+        'nodes': nodes,
+        'edges': edges,
+        'site': {
+            'id': site.pk,
+            'name': site.name,
+            'slug': site.slug,
+        },
+        'groups': groups,
+        'selected_group_id': selected_group.pk if selected_group else None,
+        'background_image_url': selected_group.background_image_url if selected_group else '',
+    }
+
+
+class GeoGlobalView(PermissionRequiredMixin, View):
+    """World map view — all sites with lat/lon plotted on an equirectangular projection."""
+
+    permission_required = ('dcim.view_site',)
+
+    def get(self, request):
+        geo_data = _build_geo_global_data(request)
+        return render(request, 'netbox_topology_views/geo_global.html', {
+            'geo_data': json.dumps(geo_data),
+        })
+
+
+class GeoSiteView(PermissionRequiredMixin, View):
+    """Per-site device layout view with optional background image overlay."""
+
+    permission_required = ('dcim.view_device',)
+
+    def get(self, request, site_id):
+        group_id = request.GET.get('group') or None
+        geo_data = _build_geo_site_data(request, site_id, group_id)
+        return render(request, 'netbox_topology_views/geo_site.html', {
+            'geo_data': json.dumps(geo_data),
+            'site_name': geo_data['site']['name'],
+            'groups': geo_data['groups'],
+            'selected_group_id': geo_data['selected_group_id'],
+        })

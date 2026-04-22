@@ -87,6 +87,11 @@ menu = PluginMenu(
                 PluginMenuItem(link="plugins:netbox_topology_views:l2_topology", link_text="L2 / VLAN Topology", permissions=["dcim.view_device", "ipam.view_vlan"]),
             ),
         ),
+        ('GEOGRAPHIC',
+            (
+                PluginMenuItem(link="plugins:netbox_topology_views:geo_global", link_text="Global Map", permissions=["dcim.view_site"]),
+            ),
+        ),
         ('COORDINATES', 
             (
                 PluginMenuItem(link="plugins:netbox_topology_views:coordinategroup_list", link_text="Coordinate Groups", buttons=coordinategroup_buttons, permissions=['netbox_topology_views.view_coordinategroup']),
