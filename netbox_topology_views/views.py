@@ -3183,74 +3183,177 @@ class TopologyIndividualOptionsView(PermissionRequiredMixin, View):
 def _build_geo_global_data(request):
     """Return JSON-serialisable data for the global geographic map view.
 
-    Each site that has both latitude and longitude set becomes a node.
-    Sites within the same region are given a shared group colour.
-    Circuits whose both terminations resolve to a site create edges.
+    Each site with lat/lon becomes a node carrying metadata for client-side
+    size/colour/border rendering: device_count, circuit_count, status, region,
+    all tags, and site-type tags (tags scoped to the Site content type).
     """
     from dcim.models import Site
+    from django.contrib.contenttypes.models import ContentType
 
-    sites = (
+    site_ct = ContentType.objects.get_for_model(Site)
+
+    # Tags scoped specifically to Site objects (object_types includes Site).
+    # These are used for border colours and the site-type filter panel.
+    site_type_tags = {
+        t.slug: {'name': t.name, 'slug': t.slug, 'color': f'#{t.color}'}
+        for t in Tag.objects.filter(object_types=site_ct)
+    }
+
+    sites = list(
         Site.objects
         .restrict(request.user, 'view')
         .exclude(latitude=None)
         .exclude(longitude=None)
         .select_related('region')
+        .prefetch_related('tags')
+        .annotate(device_count=Count('devices', distinct=True))
     )
 
-    # Map region → colour index for stable colouring
-    region_ids = list({s.region_id for s in sites if s.region_id})
-    region_color_map = {rid: i for i, rid in enumerate(sorted(region_ids))}
-    COLORS = [
+    # Stable region → palette-index mapping
+    region_ids = sorted({s.region_id for s in sites if s.region_id})
+    region_color_map = {rid: i for i, rid in enumerate(region_ids)}
+    PALETTE = [
         '#4e79a7', '#f28e2b', '#e15759', '#76b7b2', '#59a14f',
         '#edc948', '#b07aa1', '#ff9da7', '#9c755f', '#bab0ac',
     ]
 
+    STATUS_COLORS = {
+        'active':          '#28a745',
+        'planned':         '#007bff',
+        'staging':         '#fd7e14',
+        'decommissioning': '#ffc107',
+        'retired':         '#dc3545',
+    }
+
     nodes = []
     site_id_set = set()
     for site in sites:
-        # Equirectangular projection centred at (0, 0)
-        # Canvas width = 1800, height = 900 (arbitrary scale; vis-network zooms freely)
         x = (float(site.longitude) / 180.0) * 900
         y = -(float(site.latitude) / 90.0) * 450
 
-        color_idx = region_color_map.get(site.region_id, len(COLORS) - 1) % len(COLORS)
+        region_color = PALETTE[region_color_map.get(site.region_id, len(PALETTE) - 1) % len(PALETTE)]
+        status_color = STATUS_COLORS.get(site.status, '#6c757d')
+        status_label = site.get_status_display() if hasattr(site, 'get_status_display') else site.status
+
+        # All tags on this site
+        all_site_tags = [
+            {'name': t.name, 'slug': t.slug, 'color': f'#{t.color}'}
+            for t in site.tags.all()
+        ]
+        # Site-type tags (subset of all tags that are scoped to Site)
+        site_type_tag_matches = [t for t in all_site_tags if t['slug'] in site_type_tags]
+        # Border: first site-type tag colour; fallback transparent
+        border_color = site_type_tag_matches[0]['color'] if site_type_tag_matches else None
+        first_tag_color = all_site_tags[0]['color'] if all_site_tags else '#6c757d'
+
+        tooltip_lines = [site.name]
+        if site.physical_address:
+            tooltip_lines.append(site.physical_address)
+        tooltip_lines.append(f'Status: {status_label}')
+        tooltip_lines.append(f'Devices: {site.device_count}')
+        if site.region:
+            tooltip_lines.append(f'Region: {site.region.name}')
+        if site_type_tag_matches:
+            tooltip_lines.append('Type: ' + ', '.join(t['name'] for t in site_type_tag_matches))
+        elif all_site_tags:
+            tooltip_lines.append('Tags: ' + ', '.join(t['name'] for t in all_site_tags))
+
         nodes.append({
             'id': site.pk,
             'label': site.name,
-            'title': f"{site.name}\n{site.physical_address or ''}".strip(),
+            'title': '\n'.join(tooltip_lines),
             'x': round(x, 1),
             'y': round(y, 1),
             'fixed': True,
-            'color': COLORS[color_idx],
             'font': {'color': '#ffffff', 'size': 11},
             'shape': 'dot',
+            'color': region_color,
             'size': 12,
             'url': f'/dcim/sites/{site.slug}/',
-            'site_id': site.pk,
+            # Metadata for client-side rendering
+            'site_id':            site.pk,
+            'device_count':       site.device_count,
+            'circuit_count':      0,   # filled below
+            'status':             site.status,
+            'status_label':       status_label,
+            'status_color':       status_color,
+            'region_id':          site.region_id,
+            'region_name':        site.region.name if site.region else '',
+            'region_color':       region_color,
+            'tags':               all_site_tags,
+            'first_tag_color':    first_tag_color,
+            'site_type_tags':     site_type_tag_matches,   # site-scoped tags only
+            'border_color':       border_color,            # None = no border
         })
         site_id_set.add(site.pk)
 
-    # Edges: circuits between two sites
+    # Circuit count per site + inter-site edges
     edges = []
-    seen_edges = set()
-    terminations = (
-        CircuitTermination.objects
-        .filter(_site_id__in=site_id_set)
-        .select_related('circuit')
-    )
+    seen_edges: set = set()
+    site_circuit_count: Dict[int, int] = {s.pk: 0 for s in sites}
+    terminations = CircuitTermination.objects.filter(_site_id__in=site_id_set)
     site_by_circuit: Dict[int, list] = {}
     for t in terminations:
         site_by_circuit.setdefault(t.circuit_id, []).append(t._site_id)
+        if t._site_id in site_circuit_count:
+            site_circuit_count[t._site_id] += 1
 
-    for cid, site_ids in site_by_circuit.items():
-        if len(site_ids) == 2:
-            a, b = sorted(site_ids)
+    for cid, s_ids in site_by_circuit.items():
+        if len(s_ids) == 2:
+            a, b = sorted(s_ids)
             key = (a, b)
             if key not in seen_edges:
                 seen_edges.add(key)
                 edges.append({'from': a, 'to': b})
 
-    return {'nodes': nodes, 'edges': edges}
+    node_map = {n['id']: n for n in nodes}
+    for sid, count in site_circuit_count.items():
+        if sid in node_map:
+            node_map[sid]['circuit_count'] = count
+
+    # Legend / filter metadata
+    regions = [
+        {
+            'id': rid,
+            'name': next((s.region.name for s in sites if s.region_id == rid), ''),
+            'color': PALETTE[i % len(PALETTE)],
+        }
+        for i, rid in enumerate(region_ids)
+    ]
+    seen_statuses: dict = {}
+    for s in sites:
+        if s.status not in seen_statuses:
+            seen_statuses[s.status] = status_label  # last write wins, good enough
+    statuses = [
+        {'value': v, 'label': s.get_status_display() if hasattr(s, 'get_status_display') else v,
+         'color': STATUS_COLORS.get(v, '#6c757d')}
+        for s in sites for v in [s.status] if v not in [x['value'] for x in []]
+    ]
+    # Deduplicate statuses properly
+    seen_sv: set = set()
+    statuses = []
+    for s in sites:
+        v = s.status
+        if v not in seen_sv:
+            seen_sv.add(v)
+            label = s.get_status_display() if hasattr(s, 'get_status_display') else v
+            statuses.append({'value': v, 'label': label, 'color': STATUS_COLORS.get(v, '#6c757d')})
+
+    all_general_tags: dict = {}
+    for n in nodes:
+        for t in n['tags']:
+            all_general_tags[t['slug']] = t
+
+    return {
+        'nodes': nodes,
+        'edges': edges,
+        'legend': {
+            'regions':         regions,
+            'statuses':        statuses,
+            'tags':            list(all_general_tags.values()),
+            'site_type_tags':  list(site_type_tags.values()),  # for filter panel
+        },
+    }
 
 
 def _build_geo_site_data(request, site_id, group_id=None):

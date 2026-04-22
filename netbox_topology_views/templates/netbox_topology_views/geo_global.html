@@ -10,28 +10,122 @@
     background: #1a2a3a;
     border-radius: 4px;
   }
-  .geo-toolbar {
+  .geo-wrapper { position: relative; }
+
+  /* ── Legend (bottom-left) ─────────────────────────── */
+  #geo-legend {
+    position: absolute;
+    bottom: 16px;
+    left: 16px;
+    z-index: 10;
+    padding: 10px 14px;
+    font-size: 12px;
+    background: rgba(15,25,40,0.88);
+    color: #ccc;
+    border-radius: 6px;
+    min-width: 155px;
+    max-height: 340px;
+    overflow-y: auto;
+    pointer-events: none;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.4);
+  }
+  .geo-legend-title {
+    font-weight: 600;
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: .06em;
+    color: #fff;
+    margin-bottom: 6px;
+  }
+  .geo-legend-subtitle {
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: .05em;
+    opacity: .6;
+    margin-top: 2px;
+    margin-bottom: 4px;
+  }
+  .geo-legend-divider {
+    border-top: 1px solid rgba(255,255,255,.12);
+    margin: 6px 0;
+  }
+  .geo-legend-row {
     display: flex;
     align-items: center;
-    gap: 8px;
-    padding: 8px 0;
-    flex-wrap: wrap;
+    gap: 7px;
+    margin-bottom: 4px;
+    white-space: nowrap;
   }
-  .geo-legend {
+  .geo-legend-row:last-child { margin-bottom: 0; }
+  .geo-legend-swatch {
+    display: inline-block;
+    width: 12px;
+    height: 12px;
+    border-radius: 50%;
+    flex-shrink: 0;
+  }
+  /* Border-style swatch for site-type tags */
+  .geo-legend-swatch-border {
+    background: transparent !important;
+    border: 2.5px solid;
+  }
+  .geo-legend-note {
+    font-size: 10px;
+    opacity: .6;
+    margin-top: 5px;
+  }
+
+  /* ── Site-type filter panel (bottom-right) ────────── */
+  #geo-filter-panel {
     position: absolute;
     bottom: 16px;
     right: 16px;
     z-index: 10;
-    padding: 8px 12px;
+    padding: 10px 14px;
     font-size: 12px;
-    background: rgba(0,0,0,0.7);
+    background: rgba(15,25,40,0.88);
     color: #ccc;
-    border-radius: 4px;
-    pointer-events: none;
+    border-radius: 6px;
+    min-width: 170px;
+    max-height: 340px;
+    overflow-y: auto;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.4);
   }
-  .geo-wrapper {
-    position: relative;
+  .geo-filter-title {
+    font-weight: 600;
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: .06em;
+    color: #fff;
+    margin-bottom: 5px;
   }
+  .geo-filter-note {
+    font-size: 10px;
+    opacity: .6;
+    margin-bottom: 6px;
+  }
+  .geo-filter-row {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    margin-bottom: 5px;
+  }
+  .geo-filter-label {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    cursor: pointer;
+    margin: 0;
+    user-select: none;
+    white-space: nowrap;
+  }
+  .geo-filter-actions {
+    margin-top: 7px;
+    font-size: 11px;
+    opacity: .7;
+  }
+  .geo-filter-actions a { color: #8ab4d4; }
+  .geo-filter-actions a:hover { color: #fff; }
 </style>
 {% endblock %}
 
@@ -41,9 +135,28 @@
     <a href="{% url 'dcim:site_list' %}" class="btn btn-secondary btn-sm">
       <i class="mdi mdi-format-list-bulleted"></i> All Sites
     </a>
-    <button type="button" class="btn btn-secondary btn-sm" onclick="window._geoNetwork && window._geoNetwork.fit({animation:true})">
+    <button type="button" class="btn btn-secondary btn-sm"
+            onclick="window._geoNetwork && window._geoNetwork.fit({animation:true})">
       <i class="mdi mdi-fit-to-screen"></i> Fit
     </button>
+
+    <div class="input-group input-group-sm" style="width:auto">
+      <span class="input-group-text"><i class="mdi mdi-resize"></i> Size by</span>
+      <select id="geo-size-by" class="form-select form-select-sm" style="width:150px">
+        <option value="none">Fixed</option>
+        <option value="device_count">Device Count</option>
+        <option value="circuit_count">Circuit Count</option>
+      </select>
+    </div>
+
+    <div class="input-group input-group-sm" style="width:auto">
+      <span class="input-group-text"><i class="mdi mdi-palette"></i> Colour by</span>
+      <select id="geo-color-by" class="form-select form-select-sm" style="width:150px">
+        <option value="region">Region</option>
+        <option value="status">Site Status</option>
+        <option value="tag">Primary Tag</option>
+      </select>
+    </div>
   </div>
 </div>
 {% endblock %}
@@ -51,9 +164,8 @@
 {% block content %}
 <div class="geo-wrapper">
   <div id="geo-canvas"></div>
-  <div class="geo-legend">
-    <i class="mdi mdi-map-marker"></i> Click a site to view its device layout
-  </div>
+  <div id="geo-legend"><div class="geo-legend-title">Legend</div></div>
+  <div id="geo-filter-panel"></div>
 </div>
 {% endblock %}
 
@@ -67,11 +179,12 @@
   resizeCanvas();
 
   function resizeCanvas() {
-    const h = window.innerHeight
-      - (document.querySelector('.page-header') ? document.querySelector('.page-header').offsetHeight : 0)
-      - (document.querySelector('.footer')      ? document.querySelector('.footer').offsetHeight      : 0)
-      - 60;
-    document.getElementById('geo-canvas').style.height = Math.max(h, 400) + 'px';
+    const subtract = ['.page-header', '.footer'].reduce(function (acc, sel) {
+      const el = document.querySelector(sel);
+      return acc + (el ? el.offsetHeight : 0);
+    }, 60);
+    document.getElementById('geo-canvas').style.height =
+      Math.max(window.innerHeight - subtract, 400) + 'px';
   }
 </script>
 <script src="{% static 'netbox_topology_views/js/vis-network.min.js' %}"></script>
