@@ -17,6 +17,11 @@ setup(
     install_requires=[],
     packages=find_packages(),
     include_package_data=True,
+    entry_points={
+        'console_scripts': [
+            'ntv-shp-to-svg=netbox_topology_views.tools.shp_to_svg:main',
+        ],
+    },
     keywords=["netbox-plugin"],
     classifiers=[
         "Programming Language :: Python",
