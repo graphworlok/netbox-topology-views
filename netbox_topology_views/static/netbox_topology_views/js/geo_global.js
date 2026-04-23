@@ -27,9 +27,9 @@
   // Site-type tag info (for border colouring)
   const hasSiteTypeTags = (data.legend.site_type_tags || []).length > 0;
 
-  // ── Size range ────────────────────────────────────────────────────────────
-  const SIZE_MIN  =  8;
-  const SIZE_MAX  = 36;
+  // ── Size range (adjustable via toolbar sliders) ───────────────────────────
+  let SIZE_MIN  =  8;
+  let SIZE_MAX  = 36;
   const SIZE_BASE = 12;
 
   const maxDevices  = Math.max(1, ...data.nodes.map(function (n) { return n.device_count  || 0; }));
@@ -269,16 +269,49 @@
 
   // ── Toolbar ───────────────────────────────────────────────────────────────
   function bindToolbar() {
-    const sel = function (id) { return document.getElementById(id); };
-    const bind = function (id, key, callback) {
-      const el = sel(id);
+    const $ = function (id) { return document.getElementById(id); };
+
+    // Dropdowns
+    const bindSelect = function (id, getter, setter) {
+      const el = $(id);
       if (!el) return;
-      el.value = (key === 'sizeMode' ? sizeMode : key === 'scaleMode' ? scaleMode : colorMode);
-      el.addEventListener('change', function () { callback(this.value); applyModes(); });
+      el.value = getter();
+      el.addEventListener('change', function () { setter(this.value); applyModes(); });
     };
-    bind('geo-size-by',   'sizeMode',  function (v) { sizeMode  = v; });
-    bind('geo-scale-fn',  'scaleMode', function (v) { scaleMode = v; });
-    bind('geo-color-by',  'colorMode', function (v) { colorMode = v; });
+    bindSelect('geo-size-by',  function () { return sizeMode;  }, function (v) { sizeMode  = v; });
+    bindSelect('geo-scale-fn', function () { return scaleMode; }, function (v) { scaleMode = v; });
+    bindSelect('geo-color-by', function () { return colorMode; }, function (v) { colorMode = v; });
+
+    // Min / Max size sliders
+    const minSlider  = $('geo-size-min');
+    const maxSlider  = $('geo-size-max');
+    const minValEl   = $('geo-size-min-val');
+    const maxValEl   = $('geo-size-max-val');
+
+    function syncSliderLabels() {
+      if (minValEl) minValEl.textContent = SIZE_MIN;
+      if (maxValEl) maxValEl.textContent = SIZE_MAX;
+    }
+
+    if (minSlider) {
+      minSlider.value = SIZE_MIN;
+      minSlider.addEventListener('input', function () {
+        SIZE_MIN = Math.min(parseInt(this.value), SIZE_MAX - 4);
+        this.value = SIZE_MIN;
+        syncSliderLabels();
+        applyModes();
+      });
+    }
+    if (maxSlider) {
+      maxSlider.value = SIZE_MAX;
+      maxSlider.addEventListener('input', function () {
+        SIZE_MAX = Math.max(parseInt(this.value), SIZE_MIN + 4);
+        this.value = SIZE_MAX;
+        syncSliderLabels();
+        applyModes();
+      });
+    }
+    syncSliderLabels();
   }
 
   function init() {
