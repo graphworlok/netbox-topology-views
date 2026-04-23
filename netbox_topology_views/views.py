@@ -3204,18 +3204,19 @@ def _build_geo_global_data(request):
         .restrict(request.user, 'view')
         .exclude(latitude=None)
         .exclude(longitude=None)
-        .select_related('region')
+        .select_related('region', 'tenant')
         .prefetch_related('tags')
         .annotate(device_count=Count('devices', distinct=True))
     )
 
-    # Stable region → palette-index mapping
-    region_ids = sorted({s.region_id for s in sites if s.region_id})
-    region_color_map = {rid: i for i, rid in enumerate(region_ids)}
     PALETTE = [
         '#4e79a7', '#f28e2b', '#e15759', '#76b7b2', '#59a14f',
         '#edc948', '#b07aa1', '#ff9da7', '#9c755f', '#bab0ac',
     ]
+
+    # Stable tenant → palette-index mapping
+    tenant_ids = sorted({s.tenant_id for s in sites if s.tenant_id})
+    tenant_color_map = {tid: i for i, tid in enumerate(tenant_ids)}
 
     STATUS_COLORS = {
         'active':          '#28a745',
@@ -3231,32 +3232,31 @@ def _build_geo_global_data(request):
         x = (float(site.longitude) / 180.0) * 900
         y = -(float(site.latitude) / 90.0) * 450
 
-        region_color = PALETTE[region_color_map.get(site.region_id, len(PALETTE) - 1) % len(PALETTE)]
         status_color = STATUS_COLORS.get(site.status, '#6c757d')
         status_label = site.get_status_display() if hasattr(site, 'get_status_display') else site.status
+
+        tenant_color = PALETTE[tenant_color_map.get(site.tenant_id, len(PALETTE) - 1) % len(PALETTE)]
 
         # All tags on this site
         all_site_tags = [
             {'name': t.name, 'slug': t.slug, 'color': f'#{t.color}'}
             for t in site.tags.all()
         ]
-        # Site-type tags (subset of all tags that are scoped to Site)
+        # Site-type tags (subset of all tags scoped to Site content type)
         site_type_tag_matches = [t for t in all_site_tags if t['slug'] in site_type_tags]
-        # Border: first site-type tag colour; fallback transparent
         border_color = site_type_tag_matches[0]['color'] if site_type_tag_matches else None
-        first_tag_color = all_site_tags[0]['color'] if all_site_tags else '#6c757d'
 
         tooltip_lines = [site.name]
         if site.physical_address:
             tooltip_lines.append(site.physical_address)
         tooltip_lines.append(f'Status: {status_label}')
         tooltip_lines.append(f'Devices: {site.device_count}')
+        if site.tenant:
+            tooltip_lines.append(f'Tenant: {site.tenant.name}')
         if site.region:
             tooltip_lines.append(f'Region: {site.region.name}')
         if site_type_tag_matches:
             tooltip_lines.append('Type: ' + ', '.join(t['name'] for t in site_type_tag_matches))
-        elif all_site_tags:
-            tooltip_lines.append('Tags: ' + ', '.join(t['name'] for t in all_site_tags))
 
         nodes.append({
             'id': site.pk,
@@ -3267,23 +3267,21 @@ def _build_geo_global_data(request):
             'fixed': True,
             'font': {'color': '#ffffff', 'size': 11},
             'shape': 'dot',
-            'color': region_color,
+            'color': status_color,   # default fill = status
             'size': 12,
             'url': f'/dcim/sites/{site.slug}/',
             # Metadata for client-side rendering
-            'site_id':            site.pk,
-            'device_count':       site.device_count,
-            'circuit_count':      0,   # filled below
-            'status':             site.status,
-            'status_label':       status_label,
-            'status_color':       status_color,
-            'region_id':          site.region_id,
-            'region_name':        site.region.name if site.region else '',
-            'region_color':       region_color,
-            'tags':               all_site_tags,
-            'first_tag_color':    first_tag_color,
-            'site_type_tags':     site_type_tag_matches,   # site-scoped tags only
-            'border_color':       border_color,            # None = no border
+            'site_id':         site.pk,
+            'device_count':    site.device_count,
+            'circuit_count':   0,          # filled below
+            'status':          site.status,
+            'status_label':    status_label,
+            'status_color':    status_color,
+            'tenant_id':       site.tenant_id,
+            'tenant_name':     site.tenant.name if site.tenant else '',
+            'tenant_color':    tenant_color,
+            'site_type_tags':  site_type_tag_matches,
+            'border_color':    border_color,
         })
         site_id_set.add(site.pk)
 
@@ -3311,25 +3309,7 @@ def _build_geo_global_data(request):
         if sid in node_map:
             node_map[sid]['circuit_count'] = count
 
-    # Legend / filter metadata
-    regions = [
-        {
-            'id': rid,
-            'name': next((s.region.name for s in sites if s.region_id == rid), ''),
-            'color': PALETTE[i % len(PALETTE)],
-        }
-        for i, rid in enumerate(region_ids)
-    ]
-    seen_statuses: dict = {}
-    for s in sites:
-        if s.status not in seen_statuses:
-            seen_statuses[s.status] = status_label  # last write wins, good enough
-    statuses = [
-        {'value': v, 'label': s.get_status_display() if hasattr(s, 'get_status_display') else v,
-         'color': STATUS_COLORS.get(v, '#6c757d')}
-        for s in sites for v in [s.status] if v not in [x['value'] for x in []]
-    ]
-    # Deduplicate statuses properly
+    # Deduplicated statuses (for legend + filter panel)
     seen_sv: set = set()
     statuses = []
     for s in sites:
@@ -3339,19 +3319,23 @@ def _build_geo_global_data(request):
             label = s.get_status_display() if hasattr(s, 'get_status_display') else v
             statuses.append({'value': v, 'label': label, 'color': STATUS_COLORS.get(v, '#6c757d')})
 
-    all_general_tags: dict = {}
-    for n in nodes:
-        for t in n['tags']:
-            all_general_tags[t['slug']] = t
+    # Tenants (for legend)
+    tenants = [
+        {
+            'id': tid,
+            'name': next((s.tenant.name for s in sites if s.tenant_id == tid), ''),
+            'color': PALETTE[i % len(PALETTE)],
+        }
+        for i, tid in enumerate(tenant_ids)
+    ]
 
     return {
         'nodes': nodes,
         'edges': edges,
         'legend': {
-            'regions':         regions,
-            'statuses':        statuses,
-            'tags':            list(all_general_tags.values()),
-            'site_type_tags':  list(site_type_tags.values()),  # for filter panel
+            'statuses':       statuses,
+            'tenants':        tenants,
+            'site_type_tags': list(site_type_tags.values()),
         },
     }
 

@@ -2,7 +2,7 @@
  * geo_global.js — Global geographic map view.
  *
  * Globals expected from the template:
- *   window.GEO_DATA        — {nodes, edges, legend:{regions,statuses,tags,site_type_tags}}
+ *   window.GEO_DATA        — {nodes, edges, legend:{statuses,tenants,site_type_tags}}
  *   window.GEO_SITE_BASE_URL
  *   window.WORLD_MAP_URL
  */
@@ -16,16 +16,18 @@
   if (!container) return;
 
   // ── State ─────────────────────────────────────────────────────────────────
-  let sizeMode  = 'none';    // 'none' | 'device_count' | 'circuit_count'
-  let colorMode = 'region';  // 'region' | 'status' | 'tag'
+  let sizeMode  = 'device_count';  // default: size by device count
+  let colorMode = 'status';        // 'status' | 'tenant'
 
-  // Set of site-type tag slugs currently visible (all on by default)
+  // Status filter: all statuses visible by default
+  const allStatuses = new Set((data.legend.statuses || []).map(s => s.value));
+  const activeStatuses = new Set(allStatuses);
+
+  // Site-type tag info
   const siteTypeSlugs = new Set((data.legend.site_type_tags || []).map(t => t.slug));
-  // Active filter: set of slugs that are checked (shown)
-  const activeTypeFilters = new Set(siteTypeSlugs);
   const hasSiteTypeTags = siteTypeSlugs.size > 0;
 
-  // ── Size scaling ──────────────────────────────────────────────────────────
+  // ── Size scaling (sqrt so large sites don't overwhelm) ────────────────────
   const SIZE_MIN  =  8;
   const SIZE_MAX  = 40;
   const SIZE_BASE = 12;
@@ -34,6 +36,7 @@
   const maxCircuits = Math.max(1, ...data.nodes.map(n => n.circuit_count || 0));
 
   function scaleSize(value, max) {
+    if (max === 0) return SIZE_BASE;
     return SIZE_MIN + Math.round(Math.sqrt(value / max) * (SIZE_MAX - SIZE_MIN));
   }
 
@@ -43,35 +46,26 @@
     return SIZE_BASE;
   }
 
-  // ── Colour helpers ────────────────────────────────────────────────────────
+  // ── Fill colour ───────────────────────────────────────────────────────────
   function nodeFill(n) {
-    if (colorMode === 'status') return n.status_color  || '#6c757d';
-    if (colorMode === 'tag')    return n.first_tag_color || '#6c757d';
-    return n.region_color || '#4e79a7';
+    if (colorMode === 'tenant') return n.tenant_color || '#6c757d';
+    return n.status_color || '#6c757d';   // 'status' (default)
   }
 
-  // Border: first site-type tag colour, or a subtly lighter fill if none
+  // ── Border: first site-type tag colour ───────────────────────────────────
   function nodeBorder(n, fill) {
-    if (n.border_color) return n.border_color;
-    // No site-type tag — use a lighter version of the fill as a subtle ring
-    return fill;
+    return n.border_color || fill;
   }
-
   function nodeBorderWidth(n) {
     return n.border_color ? 3 : 1;
   }
 
-  // ── Visibility ────────────────────────────────────────────────────────────
+  // ── Visibility (status filter) ────────────────────────────────────────────
   function isVisible(n) {
-    if (!hasSiteTypeTags) return true;
-    const nodeSiteTypeSlugs = (n.site_type_tags || []).map(t => t.slug);
-    // No site-type tags on this site → always visible
-    if (nodeSiteTypeSlugs.length === 0) return true;
-    // Visible if ANY of its site-type tags are in the active filter
-    return nodeSiteTypeSlugs.some(slug => activeTypeFilters.has(slug));
+    return activeStatuses.has(n.status);
   }
 
-  // ── Build vis datasets ────────────────────────────────────────────────────
+  // ── Build a vis node object from raw metadata ─────────────────────────────
   function makeVisNode(n) {
     const fill   = nodeFill(n);
     const border = nodeBorder(n, fill);
@@ -84,7 +78,7 @@
       fixed: true,
       font: n.font,
       shape: 'dot',
-      size:  nodeSize(n),
+      size:   nodeSize(n),
       hidden: !isVisible(n),
       color: {
         background: fill,
@@ -92,10 +86,8 @@
         highlight:  { background: fill, border: border },
         hover:      { background: fill, border: border },
       },
-      borderWidth:          bw,
-      borderWidthSelected:  bw,
-      // carry metadata for re-application
-      _meta: n,
+      borderWidth:         bw,
+      borderWidthSelected: bw,
     };
   }
 
@@ -133,8 +125,7 @@
   // ── Navigation ────────────────────────────────────────────────────────────
   network.on('click', function (params) {
     if (params.nodes.length === 1) {
-      const vn = nodes.get(params.nodes[0]);
-      const n  = vn && vn._meta;
+      const n = data.nodes.find(function (x) { return x.id === params.nodes[0]; });
       if (n && n.site_id) {
         const base = window.GEO_SITE_BASE_URL || '/plugins/netbox_topology_views/geo/site/';
         window.location.href = base + n.site_id + '/';
@@ -144,9 +135,9 @@
   network.on('hoverNode', function () { container.style.cursor = 'pointer'; });
   network.on('blurNode',  function () { container.style.cursor = 'default'; });
 
-  // ── Apply all modes to every node ─────────────────────────────────────────
+  // ── Apply all modes ───────────────────────────────────────────────────────
   function applyModes() {
-    const updates = data.nodes.map(n => {
+    nodes.update(data.nodes.map(function (n) {
       const fill   = nodeFill(n);
       const border = nodeBorder(n, fill);
       const bw     = nodeBorderWidth(n);
@@ -163,47 +154,46 @@
         borderWidth:         bw,
         borderWidthSelected: bw,
       };
-    });
-    nodes.update(updates);
+    }));
     renderLegend();
   }
 
   // ── Legend ────────────────────────────────────────────────────────────────
   const legendEl = document.getElementById('geo-legend');
 
-  function legendRow(color, label) {
-    return `<div class="geo-legend-row">
-      <span class="geo-legend-swatch" style="background:${color}"></span>
-      <span>${label}</span>
-    </div>`;
+  function swatch(color) {
+    return `<span class="geo-legend-swatch" style="background:${color}"></span>`;
+  }
+  function borderSwatch(color) {
+    return `<span class="geo-legend-swatch geo-legend-swatch-border" style="border-color:${color}"></span>`;
+  }
+  function row(swatchHtml, label) {
+    return `<div class="geo-legend-row">${swatchHtml}<span>${label}</span></div>`;
   }
 
   function renderLegend() {
     if (!legendEl) return;
     let rows = [];
 
-    if (colorMode === 'region') {
-      rows = (data.legend.regions || []).map(r => legendRow(r.color, r.name || '(no region)'));
-    } else if (colorMode === 'status') {
-      rows = (data.legend.statuses || []).map(s => legendRow(s.color, s.label));
-    } else if (colorMode === 'tag') {
-      const shown = (data.legend.tags || []).slice(0, 14);
-      rows = shown.length
-        ? shown.map(t => legendRow(t.color, t.name))
-        : ['<div class="geo-legend-row" style="opacity:.6">No tags</div>'];
+    if (colorMode === 'tenant') {
+      (data.legend.tenants || []).forEach(function (t) {
+        rows.push(row(swatch(t.color), t.name || '(no tenant)'));
+      });
+      if (!data.legend.tenants || !data.legend.tenants.length) {
+        rows.push('<div class="geo-legend-row" style="opacity:.6">No tenants assigned</div>');
+      }
+    } else {
+      // status (default)
+      (data.legend.statuses || []).forEach(function (s) {
+        rows.push(row(swatch(s.color), s.label));
+      });
     }
 
-    // Border legend (site-type tags)
     if (hasSiteTypeTags) {
       rows.push('<div class="geo-legend-divider"></div>');
       rows.push('<div class="geo-legend-subtitle">Site type (border)</div>');
       (data.legend.site_type_tags || []).forEach(function (t) {
-        rows.push(
-          `<div class="geo-legend-row">
-             <span class="geo-legend-swatch geo-legend-swatch-border" style="border-color:${t.color}"></span>
-             <span>${t.name}</span>
-           </div>`
-        );
+        rows.push(row(borderSwatch(t.color), t.name));
       });
     }
 
@@ -216,61 +206,54 @@
     legendEl.innerHTML = '<div class="geo-legend-title">Legend</div>' + rows.join('');
   }
 
-  // ── Site-type filter panel ────────────────────────────────────────────────
+  // ── Status filter panel ───────────────────────────────────────────────────
   function buildFilterPanel() {
     const panel = document.getElementById('geo-filter-panel');
-    if (!panel || !hasSiteTypeTags) {
-      if (panel) panel.style.display = 'none';
-      return;
-    }
+    if (!panel) return;
 
-    let html = '<div class="geo-filter-title"><i class="mdi mdi-filter-outline"></i> Site Types</div>';
-    html += '<div class="geo-filter-note">Show sites with type:</div>';
-    (data.legend.site_type_tags || []).forEach(function (t) {
-      const checked = activeTypeFilters.has(t.slug) ? 'checked' : '';
+    let html = '<div class="geo-filter-title"><i class="mdi mdi-filter-outline"></i> Site Status</div>';
+    (data.legend.statuses || []).forEach(function (s) {
+      const checked = activeStatuses.has(s.value) ? 'checked' : '';
       html +=
         `<div class="geo-filter-row">
-           <input type="checkbox" id="ft-${t.slug}" data-slug="${t.slug}" ${checked}
-                  class="geo-type-checkbox form-check-input">
-           <label for="ft-${t.slug}" class="geo-filter-label">
-             <span class="geo-legend-swatch geo-legend-swatch-border" style="border-color:${t.color}"></span>
-             ${t.name}
+           <input type="checkbox" id="fs-${s.value}" data-status="${s.value}" ${checked}
+                  class="geo-status-checkbox form-check-input">
+           <label for="fs-${s.value}" class="geo-filter-label">
+             <span class="geo-legend-swatch" style="background:${s.color}"></span>
+             ${s.label}
            </label>
          </div>`;
     });
     html +=
       `<div class="geo-filter-actions">
-         <a href="#" id="geo-filter-all" class="small">All</a>
-         &nbsp;/&nbsp;
-         <a href="#" id="geo-filter-none" class="small">None</a>
+         <a href="#" id="geo-filter-all">All</a> / <a href="#" id="geo-filter-none">None</a>
        </div>`;
 
     panel.innerHTML = html;
 
     panel.addEventListener('change', function (e) {
-      if (!e.target.classList.contains('geo-type-checkbox')) return;
-      const slug = e.target.dataset.slug;
-      if (e.target.checked) activeTypeFilters.add(slug);
-      else                   activeTypeFilters.delete(slug);
+      if (!e.target.classList.contains('geo-status-checkbox')) return;
+      const val = e.target.dataset.status;
+      if (e.target.checked) activeStatuses.add(val);
+      else                   activeStatuses.delete(val);
       applyModes();
     });
 
     document.getElementById('geo-filter-all').addEventListener('click', function (e) {
       e.preventDefault();
-      siteTypeSlugs.forEach(function (s) { activeTypeFilters.add(s); });
-      panel.querySelectorAll('.geo-type-checkbox').forEach(function (cb) { cb.checked = true; });
+      allStatuses.forEach(function (v) { activeStatuses.add(v); });
+      panel.querySelectorAll('.geo-status-checkbox').forEach(function (cb) { cb.checked = true; });
       applyModes();
     });
-
     document.getElementById('geo-filter-none').addEventListener('click', function (e) {
       e.preventDefault();
-      activeTypeFilters.clear();
-      panel.querySelectorAll('.geo-type-checkbox').forEach(function (cb) { cb.checked = false; });
+      activeStatuses.clear();
+      panel.querySelectorAll('.geo-status-checkbox').forEach(function (cb) { cb.checked = false; });
       applyModes();
     });
   }
 
-  // ── Toolbar dropdowns ─────────────────────────────────────────────────────
+  // ── Toolbar ───────────────────────────────────────────────────────────────
   function bindToolbar() {
     const sizeSelect  = document.getElementById('geo-size-by');
     const colorSelect = document.getElementById('geo-color-by');
