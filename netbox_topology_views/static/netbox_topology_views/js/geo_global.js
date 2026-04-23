@@ -16,56 +16,52 @@
   if (!container) return;
 
   // ── State ─────────────────────────────────────────────────────────────────
-  let sizeMode  = 'device_count';  // default: size by device count
-  let colorMode = 'status';        // 'status' | 'tenant'
+  let sizeMode  = 'device_count'; // 'none' | 'device_count' | 'circuit_count'
+  let scaleMode = 'sqrt';         // 'log' | 'sqrt' | 'linear'
+  let colorMode = 'status';       // 'status' | 'tenant'
 
   // Status filter: all statuses visible by default
-  const allStatuses = new Set((data.legend.statuses || []).map(s => s.value));
+  const allStatuses    = new Set((data.legend.statuses    || []).map(function (s) { return s.value; }));
   const activeStatuses = new Set(allStatuses);
 
-  // Site-type tag info
-  const siteTypeSlugs = new Set((data.legend.site_type_tags || []).map(t => t.slug));
-  const hasSiteTypeTags = siteTypeSlugs.size > 0;
+  // Site-type tag info (for border colouring)
+  const hasSiteTypeTags = (data.legend.site_type_tags || []).length > 0;
 
-  // ── Size scaling (sqrt so large sites don't overwhelm) ────────────────────
+  // ── Size range ────────────────────────────────────────────────────────────
   const SIZE_MIN  =  8;
-  const SIZE_MAX  = 40;
+  const SIZE_MAX  = 36;
   const SIZE_BASE = 12;
 
-  const maxDevices  = Math.max(1, ...data.nodes.map(n => n.device_count  || 0));
-  const maxCircuits = Math.max(1, ...data.nodes.map(n => n.circuit_count || 0));
+  const maxDevices  = Math.max(1, ...data.nodes.map(function (n) { return n.device_count  || 0; }));
+  const maxCircuits = Math.max(1, ...data.nodes.map(function (n) { return n.circuit_count || 0; }));
 
-  function scaleSize(value, max) {
-    if (max === 0) return SIZE_BASE;
-    return SIZE_MIN + Math.round(Math.sqrt(value / max) * (SIZE_MAX - SIZE_MIN));
+  function scaledRatio(value, max) {
+    if (max === 0 || value === 0) return 0;
+    const r = value / max;           // 0..1 linear
+    if (scaleMode === 'log')    return Math.log(value + 1) / Math.log(max + 1);
+    if (scaleMode === 'linear') return r;
+    return Math.sqrt(r);             // sqrt (default)
   }
 
   function nodeSize(n) {
-    if (sizeMode === 'device_count')  return scaleSize(n.device_count  || 0, maxDevices);
-    if (sizeMode === 'circuit_count') return scaleSize(n.circuit_count || 0, maxCircuits);
-    return SIZE_BASE;
+    if (sizeMode === 'none') return SIZE_BASE;
+    const value = sizeMode === 'circuit_count' ? (n.circuit_count || 0) : (n.device_count || 0);
+    const max   = sizeMode === 'circuit_count' ? maxCircuits : maxDevices;
+    return SIZE_MIN + Math.round(scaledRatio(value, max) * (SIZE_MAX - SIZE_MIN));
   }
 
-  // ── Fill colour ───────────────────────────────────────────────────────────
+  // ── Fill / border colour ──────────────────────────────────────────────────
   function nodeFill(n) {
     if (colorMode === 'tenant') return n.tenant_color || '#6c757d';
-    return n.status_color || '#6c757d';   // 'status' (default)
+    return n.status_color || '#6c757d';
   }
+  function nodeBorder(n, fill) { return n.border_color || fill; }
+  function nodeBorderWidth(n)  { return n.border_color ? 3 : 1; }
 
-  // ── Border: first site-type tag colour ───────────────────────────────────
-  function nodeBorder(n, fill) {
-    return n.border_color || fill;
-  }
-  function nodeBorderWidth(n) {
-    return n.border_color ? 3 : 1;
-  }
+  // ── Visibility ────────────────────────────────────────────────────────────
+  function isVisible(n) { return activeStatuses.has(n.status); }
 
-  // ── Visibility (status filter) ────────────────────────────────────────────
-  function isVisible(n) {
-    return activeStatuses.has(n.status);
-  }
-
-  // ── Build a vis node object from raw metadata ─────────────────────────────
+  // ── Build a vis node from raw metadata ───────────────────────────────────
   function makeVisNode(n) {
     const fill   = nodeFill(n);
     const border = nodeBorder(n, fill);
@@ -76,7 +72,7 @@
       title: n.title,
       x: n.x, y: n.y,
       fixed: true,
-      font: n.font,
+      font:  n.font,
       shape: 'dot',
       size:   nodeSize(n),
       hidden: !isVisible(n),
@@ -93,6 +89,18 @@
 
   const nodes = new vis.DataSet(data.nodes.map(makeVisNode));
   const edges = new vis.DataSet(data.edges);
+
+  // ── Re-order DataSet so smaller nodes are inserted last (drawn on top) ────
+  // vis-network renders nodes in DataSet insertion order; later = on top.
+  function reorderBySize() {
+    const all = nodes.get();                           // current vis nodes
+    if (!all.length) return;
+    const ids = all.map(function (n) { return n.id; });
+    nodes.remove(ids);
+    // Sort descending by size: largest first (drawn behind), smallest last (on top)
+    all.sort(function (a, b) { return b.size - a.size; });
+    nodes.add(all);
+  }
 
   // ── World-map background ──────────────────────────────────────────────────
   const MAP_W = 1800, MAP_H = 900;
@@ -120,22 +128,27 @@
   });
 
   mapImage.onload = function () { network.redraw(); };
-  setTimeout(function () { network.fit({ animation: false }); }, 100);
+
+  // Initial fit + first z-sort
+  setTimeout(function () {
+    network.fit({ animation: false });
+    reorderBySize();
+  }, 100);
 
   // ── Navigation ────────────────────────────────────────────────────────────
   network.on('click', function (params) {
     if (params.nodes.length === 1) {
       const n = data.nodes.find(function (x) { return x.id === params.nodes[0]; });
       if (n && n.site_id) {
-        const base = window.GEO_SITE_BASE_URL || '/plugins/netbox_topology_views/geo/site/';
-        window.location.href = base + n.site_id + '/';
+        window.location.href =
+          (window.GEO_SITE_BASE_URL || '/plugins/netbox_topology_views/geo/site/') + n.site_id + '/';
       }
     }
   });
   network.on('hoverNode', function () { container.style.cursor = 'pointer'; });
   network.on('blurNode',  function () { container.style.cursor = 'default'; });
 
-  // ── Apply all modes ───────────────────────────────────────────────────────
+  // ── Apply all modes + re-sort ─────────────────────────────────────────────
   function applyModes() {
     nodes.update(data.nodes.map(function (n) {
       const fill   = nodeFill(n);
@@ -155,7 +168,20 @@
         borderWidthSelected: bw,
       };
     }));
+    reorderBySize();
     renderLegend();
+    updateScaleHint();
+  }
+
+  // ── Scale hint label ──────────────────────────────────────────────────────
+  function updateScaleHint() {
+    const el = document.getElementById('geo-scale-hint');
+    if (!el) return;
+    if (sizeMode === 'none') { el.textContent = ''; return; }
+    const labels = { log: 'Logarithmic', sqrt: 'Square root', linear: 'Linear' };
+    const metric = sizeMode === 'device_count' ? 'devices' : 'circuits';
+    const max    = sizeMode === 'device_count' ? maxDevices : maxCircuits;
+    el.textContent = `Size: ${labels[scaleMode] || scaleMode} scale · ${metric} · max ${max}`;
   }
 
   // ── Legend ────────────────────────────────────────────────────────────────
@@ -167,8 +193,8 @@
   function borderSwatch(color) {
     return `<span class="geo-legend-swatch geo-legend-swatch-border" style="border-color:${color}"></span>`;
   }
-  function row(swatchHtml, label) {
-    return `<div class="geo-legend-row">${swatchHtml}<span>${label}</span></div>`;
+  function row(sw, label) {
+    return `<div class="geo-legend-row">${sw}<span>${label}</span></div>`;
   }
 
   function renderLegend() {
@@ -179,11 +205,9 @@
       (data.legend.tenants || []).forEach(function (t) {
         rows.push(row(swatch(t.color), t.name || '(no tenant)'));
       });
-      if (!data.legend.tenants || !data.legend.tenants.length) {
+      if (!(data.legend.tenants || []).length)
         rows.push('<div class="geo-legend-row" style="opacity:.6">No tenants assigned</div>');
-      }
     } else {
-      // status (default)
       (data.legend.statuses || []).forEach(function (s) {
         rows.push(row(swatch(s.color), s.label));
       });
@@ -197,12 +221,6 @@
       });
     }
 
-    if (sizeMode !== 'none') {
-      const label = sizeMode === 'device_count' ? 'Devices' : 'Circuits';
-      const max   = sizeMode === 'device_count' ? maxDevices : maxCircuits;
-      rows.push(`<div class="geo-legend-note">● size ∝ ${label} (max ${max})</div>`);
-    }
-
     legendEl.innerHTML = '<div class="geo-legend-title">Legend</div>' + rows.join('');
   }
 
@@ -211,12 +229,12 @@
     const panel = document.getElementById('geo-filter-panel');
     if (!panel) return;
 
-    let html = '<div class="geo-filter-title"><i class="mdi mdi-filter-outline"></i> Site Status</div>';
+    let html = '<div class="geo-filter-title"><i class="mdi mdi-filter-outline"></i> Show Sites</div>';
     (data.legend.statuses || []).forEach(function (s) {
-      const checked = activeStatuses.has(s.value) ? 'checked' : '';
+      const chk = activeStatuses.has(s.value) ? 'checked' : '';
       html +=
         `<div class="geo-filter-row">
-           <input type="checkbox" id="fs-${s.value}" data-status="${s.value}" ${checked}
+           <input type="checkbox" id="fs-${s.value}" data-status="${s.value}" ${chk}
                   class="geo-status-checkbox form-check-input">
            <label for="fs-${s.value}" class="geo-filter-label">
              <span class="geo-legend-swatch" style="background:${s.color}"></span>
@@ -224,21 +242,17 @@
            </label>
          </div>`;
     });
-    html +=
-      `<div class="geo-filter-actions">
-         <a href="#" id="geo-filter-all">All</a> / <a href="#" id="geo-filter-none">None</a>
-       </div>`;
-
+    html += `<div class="geo-filter-actions">
+               <a href="#" id="geo-filter-all">All</a> / <a href="#" id="geo-filter-none">None</a>
+             </div>`;
     panel.innerHTML = html;
 
     panel.addEventListener('change', function (e) {
       if (!e.target.classList.contains('geo-status-checkbox')) return;
-      const val = e.target.dataset.status;
-      if (e.target.checked) activeStatuses.add(val);
-      else                   activeStatuses.delete(val);
+      const v = e.target.dataset.status;
+      if (e.target.checked) activeStatuses.add(v); else activeStatuses.delete(v);
       applyModes();
     });
-
     document.getElementById('geo-filter-all').addEventListener('click', function (e) {
       e.preventDefault();
       allStatuses.forEach(function (v) { activeStatuses.add(v); });
@@ -255,22 +269,23 @@
 
   // ── Toolbar ───────────────────────────────────────────────────────────────
   function bindToolbar() {
-    const sizeSelect  = document.getElementById('geo-size-by');
-    const colorSelect = document.getElementById('geo-color-by');
-    if (sizeSelect) {
-      sizeSelect.value = sizeMode;
-      sizeSelect.addEventListener('change', function () { sizeMode  = this.value; applyModes(); });
-    }
-    if (colorSelect) {
-      colorSelect.value = colorMode;
-      colorSelect.addEventListener('change', function () { colorMode = this.value; applyModes(); });
-    }
+    const sel = function (id) { return document.getElementById(id); };
+    const bind = function (id, key, callback) {
+      const el = sel(id);
+      if (!el) return;
+      el.value = (key === 'sizeMode' ? sizeMode : key === 'scaleMode' ? scaleMode : colorMode);
+      el.addEventListener('change', function () { callback(this.value); applyModes(); });
+    };
+    bind('geo-size-by',   'sizeMode',  function (v) { sizeMode  = v; });
+    bind('geo-scale-fn',  'scaleMode', function (v) { scaleMode = v; });
+    bind('geo-color-by',  'colorMode', function (v) { colorMode = v; });
   }
 
   function init() {
     bindToolbar();
     buildFilterPanel();
     renderLegend();
+    updateScaleHint();
   }
 
   if (document.readyState === 'loading') {

@@ -142,7 +142,7 @@
 
     <div class="input-group input-group-sm" style="width:auto">
       <span class="input-group-text"><i class="mdi mdi-resize"></i> Size by</span>
-      <select id="geo-size-by" class="form-select form-select-sm" style="width:150px">
+      <select id="geo-size-by" class="form-select form-select-sm" style="width:140px">
         <option value="none">Fixed</option>
         <option value="device_count" selected>Device Count</option>
         <option value="circuit_count">Circuit Count</option>
@@ -150,8 +150,17 @@
     </div>
 
     <div class="input-group input-group-sm" style="width:auto">
+      <span class="input-group-text"><i class="mdi mdi-chart-bell-curve"></i> Scale</span>
+      <select id="geo-scale-fn" class="form-select form-select-sm" style="width:140px">
+        <option value="log">Logarithmic</option>
+        <option value="sqrt" selected>Square root</option>
+        <option value="linear">Linear</option>
+      </select>
+    </div>
+
+    <div class="input-group input-group-sm" style="width:auto">
       <span class="input-group-text"><i class="mdi mdi-palette"></i> Colour by</span>
-      <select id="geo-color-by" class="form-select form-select-sm" style="width:130px">
+      <select id="geo-color-by" class="form-select form-select-sm" style="width:110px">
         <option value="status" selected>Status</option>
         <option value="tenant">Tenant</option>
       </select>
@@ -165,6 +174,12 @@
   <div id="geo-canvas"></div>
   <div id="geo-legend"><div class="geo-legend-title">Legend</div></div>
   <div id="geo-filter-panel"></div>
+</div>
+<div class="text-muted small mt-1" style="padding-left:4px">
+  <i class="mdi mdi-information-outline"></i>
+  <span id="geo-scale-hint"></span>
+  &nbsp;·&nbsp; Click a site node to view its device layout.
+  Smaller sites always drawn on top.
 </div>
 {% endblock %}
 
